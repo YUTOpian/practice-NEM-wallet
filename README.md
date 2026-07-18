@@ -1,7 +1,7 @@
 # Symbol Simple Wallet
 
-**このアプリでは、ニーモニックや秘密鍵の入力が不要です**  
-ブラウザだけで即使える、安全・シンプルなSymbol (XYM) Webウォレットです。
+**このアプリでは、XEMやXYMを管理する予定**  
+ブラウザだけで即使える、安全・シンプルなWebウォレットです。
 
 ## 使い方
 1. [ここをクリックで即開く → GitHub Pages]https://yutopian.github.io/practice-wallet/
