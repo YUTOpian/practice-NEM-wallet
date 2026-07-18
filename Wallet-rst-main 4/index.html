@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Symbol Simple Wallet</title>
+
+  <link rel="stylesheet" href="css/base.css" />
+  <link rel="stylesheet" href="css/wallet.css" />
+</head>
+
+<body>
+
+<header>
+  <h2>Symbol Simple Wallet</h2>
+
+  <div class="header-info">
+    <p><span id="node-info">---</span></p>
+  </div>
+</header>
+
+<div class="container">
+
+  <!-- ============================================================
+       アカウント画面
+  ============================================================ -->
+  <div id="account-page" class="page active">
+
+    <div class="card">
+
+      <h2>アカウント情報</h2>
+
+      <p><b>アドレス：</b></p>
+      <div class="address-row">
+        <span id="account-address" class="address-text">---</span>
+      </div>
+      <button id="copy-address-btn" class="copy-btn">🗒️</button>
+
+      <p>
+        <b>残高：</b>
+        <span id="account-balance">---</span>
+      </p>
+
+      <div class="wallet-actions">
+        <button id="receive-btn" class="button-primary">受け取り</button>
+        <button id="send-btn" class="button-primary">送金</button>
+        <button id="harvest-btn" class="button-primary">ハーベスト</button>
+      </div>
+
+      <hr>
+
+      <!-- タブ -->
+      <div class="wallet-tabs">
+
+        <div id="tab-token" class="wallet-tab active">
+          保有トークン
+        </div>
+
+        <div id="tab-activity" class="wallet-tab">
+          アクティビティ
+        </div>
+
+      </div>
+
+      <!-- 保有トークン -->
+      <div id="token-content">
+
+        <div id="mosaic-list">
+          読み込み中...
+        </div>
+
+      </div>
+
+      <!-- アクティビティ -->
+      <div id="activity-content" style="display:none;">
+
+        <div id="tx-list">
+          読み込み中...
+        </div>
+
+      </div>
+
+    </div>
+
+  </div>
+
+  <!-- ============================================================
+       モザイク選択画面
+  ============================================================ -->
+  <div id="send-page" class="page">
+
+    <div class="card">
+
+      <h2>トークン選択</h2>
+
+      <button id="back-account" class="button-primary">
+        ← 戻る
+      </button>
+
+      <p>送りたいトークンを選択してください</p>
+
+      <div id="send-mosaic-list"></div>
+
+    </div>
+
+  </div>
+
+  <!-- ============================================================
+       送金入力画面
+  ============================================================ -->
+  <div id="transfer-page" class="page">
+
+    <div class="card">
+
+      <h2>トークン送金</h2>
+
+      <button id="back-send" class="button-primary">
+        ← トークン選択へ戻る
+      </button>
+
+      <p>
+        <b>送信トークン：</b>
+        <span id="selected-mosaic-name">未選択</span>
+      </p>
+
+      <p>
+        <b>保有数量：</b>
+        <span id="selected-mosaic-balance">---</span>
+      </p>
+
+      <input type="hidden" id="selected-mosaic-id">
+
+      <input
+        id="tx-recipient"
+        class="input-box"
+        placeholder="宛先アドレス">
+
+      <input
+        id="tx-amount"
+        class="input-box"
+        type="number"
+        placeholder="数量">
+
+      <textarea
+        id="tx-message"
+        class="input-box"
+        placeholder="メッセージ（任意）"></textarea>
+
+      <textarea id="message"></textarea>
+
+<label class="switch">
+  <input type="checkbox" id="encryptMessage">
+  <span>メッセージを暗号化する</span>
+</label>
+
+      <button id="btn-transfer" class="button-primary">
+        送金する
+      </button>
+
+      <div id="tx-status"></div>
+
+    </div>
+
+  </div>
+
+  <!-- ============================================================
+       受取画面
+  ============================================================ -->
+  <div id="receive-page" class="page">
+
+    <div class="card">
+
+      <h2>受け取り</h2>
+
+      <button id="back-account-receive"
+              class="button-primary">
+        ← 戻る
+      </button>
+
+      <div id="receive-qrcode"></div>
+
+      <p id="receive-address"
+         class="address-text">
+      </p>
+
+      <button id="copy-receive-address"
+              class="button-primary">
+        アドレスをコピー
+      </button>
+
+    </div>
+
+  </div>
+
+  <!-- ============================================================
+       ハーベスト画面
+  ============================================================ -->
+  <div id="harvest-page" class="page">
+
+    <div class="card">
+
+      <h2>ハーベスト設定</h2>
+
+      <button id="back-account-harvest"
+              class="button-primary">
+        ← 戻る
+      </button>
+
+      <p>アカウント:</p>
+
+      <div id="harvest-address">
+        ---
+      </div>
+
+      <div>
+        重要度：
+        <span id="harvest-importance">
+          ---
+        </span>
+      </div>
+
+      <hr>
+
+      <h3>設定</h3>
+
+      <button id="start-harvest-btn"
+              class="button-primary">
+        ハーベスト開始
+      </button>
+
+      <button id="stop-harvest-btn"
+              class="button-primary">
+        ハーベスト停止
+      </button>
+
+      <div id="harvest-status">
+        状態確認中...
+      </div>
+
+    </div>
+
+  </div>
+
+</div>
+
+<script type="module" src="js/index.js"></script>
+
+</body>
+</html>
