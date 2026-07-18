@@ -1,14 +1,18 @@
 // config.js
-// 設定値とアプリ全体で共有する状態
+// Symbol SDK v3 用 設定値とアプリ全体で共有する状態
 
+// ============================================================
 // NodeWatch エンドポイント
+// ============================================================
 export const MAINNET_NODEWATCH_URL =
   "https://nodewatch.symbol.tools/api/symbol/nodes/peer?only_ssl=true&limit=10&order=random";
 
 export const TESTNET_NODEWATCH_URL =
   "https://nodewatch.symbol.tools/testnet/api/symbol/nodes/peer?only_ssl=true&limit=10&order=random";
 
-// NodeWatch が落ちているとき用の fallback ノード
+// ============================================================
+// NodeWatch停止時 fallback ノード
+// ============================================================
 export const MAINNET_FALLBACK_NODES = [
   "https://sym-main-01.opening-line.jp:3001",
   "https://sym-main-02.opening-line.jp:3001",
@@ -29,40 +33,80 @@ export const TESTNET_FALLBACK_NODES = [
   "https://t.sakia.harvestasya.com:3001",
 ];
 
-// XYM モザイク ID（ネットワーク別）
+// ============================================================
+// XYM Mosaic ID
+// ============================================================
 export const XYM_MOSAIC_ID = {
   MAINNET: "6BED913FA20223F8",
   TESTNET: "72C0212E67A08BCE",
 };
 
-// Symbol SDK の NetworkType と同じ値
+// ============================================================
+// Network Type
+// Symbol SDK v3でもREST APIでは104 / 152 の識別値を利用するため保持
+// ============================================================
 export const NetworkType = {
   MAINNET: 104,
   TESTNET: 152,
 };
 
-// 共有状態
+// ============================================================
+// Application State
+// quick_learning_symbol_v3 の表現に合わせる
+// ============================================================
 export const appState = {
-  NODE: null, 
+  // 現在利用中Node
+  NODE: null,
+
+  // Transaction用
   epochAdjustment: 0,
+
+  // Symbol SDK v3
   facade: null,
   sdkCore: null,
   sdkSymbol: null,
 
-  currentPubKey: null,
-  currentAddress: null, // Address オブジェクト
-  networkType: null, // 104 or 152
-
+  // SDK準備状態
   isSdkReady: false,
-  
-    // 保有モザイク一覧
+
+  // ========================================================
+  // Account
+  // ========================================================
+  // REST API取得結果
+  // { address, publicKey, mosaics }
+  accountInfo: null,
+
+  // 現在Account PublicKey (sdkSymbol.PublicKey)
+  currentPubKey: null,
+
+  // 現在Account Address (sdkSymbol.Address)
+  currentAddress: null,
+
+  // 104 MAINNET / 152 TESTNET
+  networkType: null,
+
+  // ========================================================
+  // Mosaic
+  // ========================================================
+  // accountInfo.mosaics 保存用
   mosaicList: [],
-  
-   // モザイク情報
+
+  // 表示用Mosaic情報
+  /*
+    {
+      mosaicId: {
+        mosaicName,
+        amount,
+        divisibility
+      }
+    }
+  */
   mosaicInfo: {},
 };
 
-// 現在のネットワークに応じた XYM モザイク ID を返す
+// ============================================================
+// 現在NetworkのXYM Mosaic ID取得
+// ============================================================
 export function getXymMosaicIdHex() {
   return appState.networkType === NetworkType.TESTNET
     ? XYM_MOSAIC_ID.TESTNET
