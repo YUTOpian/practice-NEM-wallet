@@ -1,7 +1,6 @@
 // index.js
 
 import { appState } from "./config.js";
-import { autoConnectSSS } from "./sss.js";
 import { sendTx } from "./transfer.js";
 import { loadRecentTx, initLiveTx } from "./transactions.js";
 import { initWebSocket } from "./ws.js";
