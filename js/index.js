@@ -1,6 +1,7 @@
 // index.js
 
 import { appState } from "./config.js";
+import { autoConnectSSS } from "./sss.js";
 import { sendTx } from "./transfer.js";
 import { loadRecentTx, initLiveTx } from "./transactions.js";
 import { initWebSocket } from "./ws.js";
@@ -8,7 +9,17 @@ import { showPopup } from "./utils.js";
 import { checkHarvestStatus, startHarvest } from "./harvest.js";
 import QRCode from "https://esm.sh/qrcode";
 
+window.addEventListener("load", async () => {
+  // ============================
+  // SSS初期化
+  // ============================
+  await new Promise(resolve => setTimeout(resolve, 1000));
+  await autoConnectSSS();
 
+  if (!window.SSS || !window.SSS.activePublicKey) {
+    showPopup("⚠️ SSS Extension とリンクしてください", true);
+    return;
+  }
 
   // ============================
   // ページ取得
@@ -68,13 +79,7 @@ import QRCode from "https://esm.sh/qrcode";
   // ============================
   document.getElementById("receive-btn")?.addEventListener("click", async () => {
     showPage(receivePage);
-    if (!appState.currentAddress) {
-  showPopup("ウォレットを開いてください", true);
-  return;
-}
-
-const address = appState.currentAddress.toString();
-    appState.currentAddress = account.address;
+    const address = appState.currentAddress.toString();
     
     document.getElementById("receive-address").textContent = address;
     const qr = document.getElementById("receive-qrcode");
@@ -144,8 +149,7 @@ const address = appState.currentAddress.toString();
   // ============================
   // Tx履歴・WebSocket
   // ============================
-  await refreshAccount();
-await loadRecentTx();
+  await loadRecentTx();
 
   if (appState.currentAddress) {
     initWebSocket(appState.currentAddress.toString());
@@ -153,5 +157,4 @@ await loadRecentTx();
   }
 });
 
-
-                
+          
