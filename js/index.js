@@ -7,239 +7,442 @@ import { initWebSocket } from "./ws.js";
 import { initSdk } from "./sdk.js";
 import { showPopup } from "./utils.js";
 import { checkHarvestStatus } from "./harvest.js";
-//import QRCode from "https://esm.sh/qrcode";
+// import QRCode from "https://esm.sh/qrcode";
 
 window.addEventListener("load", async () => {
-  // ============================
-  // SSS初期化
-  // ============================
-  await new Promise(resolve => setTimeout(resolve, 1000));
-  await autoConnectSSS();
 
-  if (!window.SSS || !window.SSS.activePublicKey) {
-    showPopup("⚠️ SSS Extension とリンクしてください", true);
-    return;
-  }
+  // ======================================
+  // ページ取得
+  // ======================================
 
-  // ============================
-  // SDK初期化・アカウント取得
-  // ============================
-  await initSdk();
-  await refreshAccount();
+  const welcomePage = document.getElementById("welcome-page");
+  const sssPage = document.getElementById("sss-page");
+  const localPage = document.getElementById("local-page");
 
-  // ============================
-  // ページ要素取得
-  // ============================
   const accountPage = document.getElementById("account-page");
   const sendPage = document.getElementById("send-page");
   const transferPage = document.getElementById("transfer-page");
   const receivePage = document.getElementById("receive-page");
   const harvestPage = document.getElementById("harvest-page");
 
-  // ============================
-// タブ
-// ============================
-const tokenTab = document.getElementById("token-tab");
-const activityTab = document.getElementById("activity-tab");
+  // ======================================
+  // ページ切替
+  // ======================================
 
-const tokenPanel = document.getElementById("token-panel");
-const activityPanel = document.getElementById("activity-panel");
-
-tokenTab?.addEventListener("click", () => {
-
-  tokenTab.classList.add("active");
-  activityTab.classList.remove("active");
-
-  tokenPanel.classList.add("active");
-  activityPanel.classList.remove("active");
-
-});
-
-activityTab?.addEventListener("click", () => {
-
-  activityTab.classList.add("active");
-  tokenTab.classList.remove("active");
-
-  activityPanel.classList.add("active");
-  tokenPanel.classList.remove("active");
-
-});
-
-  
-  // ============================
-  // ページ切替共通関数
-  // ============================
   function showPage(page) {
-    document.querySelectorAll(".page").forEach(p => {
+
+    document.querySelectorAll(".page").forEach((p) => {
       p.classList.remove("active");
     });
+
     page.classList.add("active");
+
   }
 
-  // ============================
-  // 送金ボタン (account -> mosaic選択)
-  // ============================
-  document.getElementById("send-btn")?.addEventListener("click", () => {
-    console.log("送金画面へ");
-    showPage(sendPage);
+  // 最初はWelcome画面
+  showPage(welcomePage);
 
-    const sendList = document.getElementById("send-mosaic-list");
-    const mosaicList = document.getElementById("mosaic-list");
+  // ======================================
+  // Welcome
+  // ======================================
 
-    if (!sendList || !mosaicList) {
-      console.log("モザイク一覧取得失敗");
-      return;
-    }
+  document
+    .getElementById("select-sss")
+    ?.addEventListener("click", () => {
 
-    // 保有モザイク一覧コピー
-    sendList.innerHTML = mosaicList.innerHTML;
-    console.log("送金一覧件数:", sendList.querySelectorAll(".mosaic-item").length);
+      showPage(sssPage);
+
+    });
+
+  document
+    .getElementById("select-local")
+    ?.addEventListener("click", () => {
+
+      showPage(localPage);
+
+    });
+
+  // ======================================
+  // 戻る
+  // ======================================
+
+  document
+    .getElementById("back-welcome-sss")
+    ?.addEventListener("click", () => {
+
+      showPage(welcomePage);
+
+    });
+
+  document
+    .getElementById("back-welcome-local")
+    ?.addEventListener("click", () => {
+
+      showPage(welcomePage);
+
+    });
+
+  // ======================================
+  // SSS接続
+  // ======================================
+
+  document
+    .getElementById("connect-sss")
+    ?.addEventListener("click", async () => {
+
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+
+      await autoConnectSSS();
+
+      if (!window.SSS || !window.SSS.activePublicKey) {
+
+        showPopup("⚠️ SSS Extension とリンクしてください", true);
+        return;
+
+      }
+
+      await initSdk();
+      await refreshAccount();
+
+      showPage(accountPage);
+
+      await loadRecentTx();
+
+      if (appState.currentAddress) {
+
+        initWebSocket(appState.currentAddress.toString());
+        initLiveTx(appState.currentAddress.toString());
+
+      }
+
+    });
+
+  // ======================================
+  // Localモード
+  // ======================================
+
+  document
+    .getElementById("import-wallet")
+    ?.addEventListener("click", () => {
+
+      showPage(document.getElementById("import-page"));
+
+    });
+
+  document
+    .getElementById("create-wallet")
+    ?.addEventListener("click", () => {
+
+      showPage(document.getElementById("create-page"));
+
+    });
+
+  // ======================================
+  // タブ切替
+  // ======================================
+
+  const tabToken = document.getElementById("tab-token");
+  const tabActivity = document.getElementById("tab-activity");
+
+  const tokenContent = document.getElementById("token-content");
+  const activityContent = document.getElementById("activity-content");
+
+  tabToken?.addEventListener("click", () => {
+
+    tabToken.classList.add("active");
+    tabActivity.classList.remove("active");
+
+    tokenContent.style.display = "block";
+    activityContent.style.display = "none";
+
   });
 
-  // ============================
-  // モザイク選択 (mosaic -> transfer入力)
-  // ============================
-  document.getElementById("send-mosaic-list")?.addEventListener("click", e => {
-    const item = e.target.closest(".mosaic-item");
-    if (!item) return;
+  tabActivity?.addEventListener("click", () => {
 
-    console.log("モザイククリック", item);
+    tabActivity.classList.add("active");
+    tabToken.classList.remove("active");
 
-    const name = item.querySelector(".mosaic-name")?.textContent.trim();
-    const id = item.querySelector(".mosaic-id")?.textContent.trim();
-    const amount = item.querySelector(".mosaic-amount")?.textContent.trim();
+    tokenContent.style.display = "none";
+    activityContent.style.display = "block";
 
-    document.getElementById("selected-mosaic-name").textContent = name;
-    document.getElementById("selected-mosaic-id").value = id;
-    document.getElementById("selected-mosaic-balance").textContent = amount;
-
-    showPage(transferPage);
   });
 
-// ============================
-// タブ切り替え
-// ============================
+  // ======================================
+  // 送金画面へ
+  // ======================================
 
-const tabToken = document.getElementById("tab-token");
-const tabActivity = document.getElementById("tab-activity");
+  document
+    .getElementById("send-btn")
+    ?.addEventListener("click", () => {
 
-const tokenContent = document.getElementById("token-content");
-const activityContent = document.getElementById("activity-content");
+      showPage(sendPage);
 
-tabToken?.addEventListener("click", () => {
+      const sendList =
+        document.getElementById("send-mosaic-list");
 
-  tabToken.classList.add("active");
-  tabActivity.classList.remove("active");
+      const mosaicList =
+        document.getElementById("mosaic-list");
 
-  tokenContent.style.display = "block";
-  activityContent.style.display = "none";
+      if (!sendList || !mosaicList) {
+        return;
+      }
 
-});
+      sendList.innerHTML = mosaicList.innerHTML;
 
-tabActivity?.addEventListener("click", () => {
+    });
 
-  tabActivity.classList.add("active");
-  tabToken.classList.remove("active");
+  // ======================================
+  // モザイク選択
+  // ======================================
 
-  tokenContent.style.display = "none";
-  activityContent.style.display = "block";
+  document
+    .getElementById("send-mosaic-list")
+    ?.addEventListener("click", (e) => {
+
+      const item =
+        e.target.closest(".mosaic-item");
+
+      if (!item) {
+        return;
+      }
+
+      const name =
+        item.querySelector(".mosaic-name")?.textContent.trim();
+
+      const id =
+        item.querySelector(".mosaic-id")?.textContent.trim();
+
+      const amount =
+        item.querySelector(".mosaic-amount")?.textContent.trim();
+
+      document.getElementById("selected-mosaic-name").textContent = name;
+
+      document.getElementById("selected-mosaic-id").value = id;
+
+      document.getElementById("selected-mosaic-balance").textContent = amount;
+
+      showPage(transferPage);
+
+    });
+
+  // ======================================
+  // 戻る
+  // ======================================
+
+  document
+    .getElementById("back-account")
+    ?.addEventListener("click", () => {
+
+      showPage(accountPage);
+
+    });
+
+  document
+    .getElementById("back-send")
+    ?.addEventListener("click", () => {
+
+      showPage(sendPage);
+
+    });
+
+  // ======================================
+  // 送金
+  // ======================================
+
+  document
+    .getElementById("btn-transfer")
+    ?.addEventListener("click", async () => {
+
+      await sendTx();
+
+    });
+
+  // ======================================
+  // ローカルウォレット
+  // ======================================
+
+  document
+    .getElementById("back-local-import")
+    ?.addEventListener("click", () => {
+
+      showPage(localPage);
+
+    });
+
+  document
+    .getElementById("mnemonic-confirm")
+    ?.addEventListener("change", (e) => {
+
+      document.getElementById("btn-next-pin").disabled =
+        !e.target.checked;
+
+    });
+
+  document
+    .getElementById("btn-next-pin")
+    ?.addEventListener("click", () => {
+
+      showPage(document.getElementById("pin-page"));
+
+    });
+
+  document
+    .getElementById("btn-save-pin")
+    ?.addEventListener("click", () => {
+
+      const pin1 =
+        document.getElementById("pin1").value;
+
+      const pin2 =
+        document.getElementById("pin2").value;
+
+      if (pin1.length < 4) {
+
+        showPopup("PINは4桁以上入力してください", true);
+        return;
+
+      }
+
+      if (pin1 !== pin2) {
+
+        showPopup("PINが一致しません", true);
+        return;
+
+      }
+
+      showPopup("PINを保存しました");
+
+      showPage(accountPage);
+
+    });
+
+  // ======================================
+  // 受け取り画面
+  // ======================================
+
+  document
+    .getElementById("receive-btn")
+    ?.addEventListener("click", async () => {
+
+      showPage(receivePage);
+
+      const address =
+        document.getElementById("account-address")
+          .textContent
+          .trim();
+
+      document.getElementById("receive-address").textContent = address;
+
+      const qr =
+        document.getElementById("receive-qrcode");
+
+      qr.innerHTML = "";
+
+      if (typeof QRCode !== "undefined") {
+
+        const dataUrl = await QRCode.toDataURL(address, {
+          width: 220,
+          margin: 1
+        });
+
+        qr.innerHTML = `<img src="${dataUrl}" alt="QR Code">`;
+
+      }
+
+    });
+
+  document
+    .getElementById("back-account-receive")
+    ?.addEventListener("click", () => {
+
+      showPage(accountPage);
+
+    });
+
+  // ======================================
+  // Harvest
+  // ======================================
+
+  document
+    .getElementById("harvest-btn")
+    ?.addEventListener("click", async () => {
+
+      showPage(harvestPage);
+
+      const address =
+        document.getElementById("account-address")
+          .textContent
+          .trim();
+
+      document.getElementById("harvest-address").textContent = address;
+
+      await checkHarvestStatus();
+
+    });
+
+  document
+    .getElementById("back-account-harvest")
+    ?.addEventListener("click", () => {
+
+      showPage(accountPage);
+
+    });
+
+  // ======================================
+  // アドレスコピー
+  // ======================================
+
+  document
+    .getElementById("copy-address-btn")
+    ?.addEventListener("click", () => {
+
+      const address =
+        document.getElementById("account-address")
+          .textContent
+          .trim();
+
+      navigator.clipboard.writeText(address);
+
+      showPopup("アドレスをコピーしました");
+
+    });
+
+  document
+    .getElementById("copy-receive-address")
+    ?.addEventListener("click", () => {
+
+      const address =
+        document.getElementById("receive-address")
+          .textContent
+          .trim();
+
+      navigator.clipboard.writeText(address);
+
+      showPopup("アドレスをコピーしました");
+
+    });
+
+  // ======================================
+  // 初期読込
+  // ======================================
+
+  if (appState.currentAddress) {
+
+    await loadRecentTx();
+
+    initWebSocket(
+      appState.currentAddress.toString()
+    );
+
+    initLiveTx(
+      appState.currentAddress.toString()
+    );
+
+  }
 
 });
 
   
-  // ============================
-  // 画面遷移：戻るボタン各種
-  // ============================
-  document.getElementById("back-account")?.addEventListener("click", () => {
-    showPage(accountPage);
-  });
-
-  document.getElementById("back-send")?.addEventListener("click", () => {
-    showPage(sendPage);
-  });
-
-  document.getElementById("back-account-receive")?.addEventListener("click", () => {
-    showPage(accountPage);
-  });
-
-  // ============================
-  // 送金実行
-  // ============================
-  document.getElementById("btn-transfer")?.addEventListener("click", sendTx);
-
-  // ============================
-  // 受け取り画面表示
-  // ============================
-  document.getElementById("receive-btn")?.addEventListener("click", async () => {
-    console.log("受取画面");
-    showPage(receivePage);
-
-    const address = document.getElementById("account-address").textContent.trim();
-
-    // アドレス表示とQRコード生成
-    document.getElementById("receive-address").textContent = address;
-    const qr = document.getElementById("receive-qrcode");
-    qr.innerHTML = "";
-
-const dataUrl = await QRCode.toDataURL(address, {
-    width: 220,
-    margin: 1
-});
-
-qr.innerHTML = `<img src="${dataUrl}" alt="QR Code">`;
-  });
-
-// ============================
-// ハーベスト画面表示
-// ============================
-document.getElementById("harvest-btn")?.addEventListener("click", async () => {
-
-  console.log("ハーベスト画面へ");
-
-  showPage(harvestPage);
 
 
-  const address =
-    document.getElementById("account-address")
-      .textContent
-      .trim();
-
-
-  document.getElementById("harvest-address")
-    .textContent = address;
-
-
-  await checkHarvestStatus();
-
-});
-
-// ============================
-// ハーベスト画面 戻る
-// ============================
-document.getElementById("back-account-harvest")?.addEventListener("click", () => {
-
-  showPage(accountPage);
-
-});
-
-  // ============================
-  // アドレスコピー
-  // ============================
-  document.getElementById("copy-address-btn")?.addEventListener("click", () => {
-    const addr = document.getElementById("account-address").textContent.trim();
-
-    navigator.clipboard.writeText(addr).then(() => {
-      showPopup("アドレスをコピーしました");
-    });
-  });
-
-  // ============================
-  // 取引履歴の読み込み & WebSocket同期開始
-  // ============================
-  await loadRecentTx();
-
-  if (appState.currentAddress) {
-    initWebSocket(appState.currentAddress.toString());
-    initLiveTx(appState.currentAddress.toString());
-  }
-});
+                        
