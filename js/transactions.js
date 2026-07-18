@@ -1,41 +1,53 @@
 // transactions.js
+
 import { appState, NetworkType } from "./config.js";
 import { addCallback, getBlockTimestamp } from "./ws.js";
 
 const txMap = {};
 
 /* ============================================================
-   timestamp → 人間時間
+   Symbol timestamp → 人間時間
 ============================================================ */
 function formatTimestamp(symbolTimestamp) {
   if (!symbolTimestamp || !appState.epochAdjustment) return "";
 
-  const unixMs = appState.epochAdjustment * 1000 + Number(symbolTimestamp);
+  const unixMs = Number(appState.epochAdjustment) * 1000 + Number(symbolTimestamp);
   return new Date(unixMs).toLocaleString("ja-JP", { hour12: false });
 }
 
 /* ============================================================
-   Hex → UTF-8
+   v3 Message Decode
+   0x00 PlainMessage, 0x01 EncryptedMessage, 0xFF RawMessage, 0xFE Harvesting Delegation
 ============================================================ */
 function decodeMessage(payload) {
   if (!payload) return "(no message)";
 
-  let hex = payload;
-  if (hex.startsWith("00")) hex = hex.slice(2);
-
-  const arr = hex.match(/.{1,2}/g);
-  if (!arr) return "(decode error)";
-
   try {
-    const bytes = new Uint8Array(arr.map(h => parseInt(h, 16)));
-    return new TextDecoder().decode(bytes);
-  } catch {
+    const bytes = new Uint8Array(
+      payload.match(/.{1,2}/g).map(byte => parseInt(byte, 16))
+    );
+    const type = bytes[0];
+
+    switch(type) {
+      case 0x00:
+        return new TextDecoder().decode(bytes.slice(1));
+      case 0x01:
+        return "🔐 暗号化メッセージ";
+      case 0xff:
+        return "RawMessage: " + Buffer.from(bytes.slice(1)).toString("hex");
+      case 0xfe:
+        return "🌱 ハーベスト委任メッセージ";
+      default:
+        return "Unknown Message (" + type + ")";
+    }
+  } catch(e) {
+    console.error("message decode error", e);
     return "(decode error)";
   }
 }
 
 /* ============================================================
-   Address変換
+   Address
 ============================================================ */
 function formatAddress(address) {
   if (!address) return "---";
@@ -48,7 +60,7 @@ function formatAddress(address) {
 }
 
 /* ============================================================
-   モザイク取得
+   Mosaic取得
 ============================================================ */
 function extractAmount(tx) {
   if (!tx.mosaics || tx.mosaics.length === 0) return null;
@@ -58,12 +70,13 @@ function extractAmount(tx) {
   const direction = signer === myPub ? "send" : "receive";
 
   const mosaics = tx.mosaics.map(mosaic => {
-    const info = appState.mosaicInfo?.[mosaic.id];
+    const id = mosaic.id;
+    const info = appState.mosaicInfo?.[id];
     const divisibility = info?.divisibility ?? 0;
-    const name = info?.name ?? mosaic.id;
+    const name = info?.name ?? id;
 
     return {
-      id: mosaic.id,
+      id,
       name,
       amount: Number(mosaic.amount) / (10 ** divisibility)
     };
@@ -73,7 +86,7 @@ function extractAmount(tx) {
 }
 
 /* ============================================================
-   Explorer URL
+   Explorer
 ============================================================ */
 function getExplorerUrl(hash) {
   return appState.networkType === NetworkType.TESTNET
@@ -82,7 +95,7 @@ function getExplorerUrl(hash) {
 }
 
 /* ============================================================
-   アクティビティカード
+   Txカード
 ============================================================ */
 export function createTxCard(txInfo) {
   const { hash, msg, state, timestamp, mosaics, direction, sender, recipient } = txInfo;
@@ -90,7 +103,7 @@ export function createTxCard(txInfo) {
   const label = direction === "receive" ? "受信" : "送信";
 
   let mosaicHtml = "";
-  if (mosaics && mosaics.length > 0) {
+  if (mosaics && mosaics.length) {
     mosaicHtml = mosaics.map(mosaic => `
       <div class="tx-mosaic">
         <div>トークン: ${mosaic.name}</div>
@@ -108,9 +121,7 @@ export function createTxCard(txInfo) {
         <div class="tx-address">送金先:<br>${recipient ?? "---"}</div>
         ${mosaicHtml}
         <div class="tx-message">メッセージ:<br>${msg}</div>
-        ${state === "confirmed" && timestamp ? `
-          <div class="tx-time">🕒 ${formatTimestamp(timestamp)}</div>
-        ` : ""}
+        ${state === "confirmed" && timestamp ? `<div class="tx-time">🕒 ${formatTimestamp(timestamp)}</div>` : ""}
       </div>
     </div>
   `;
@@ -125,14 +136,20 @@ function appendTx(txInfo) {
 }
 
 /* ============================================================
-   直近10件
+   直近10件取得 (Symbol v3 REST API)
 ============================================================ */
 export async function loadRecentTx() {
   const el = document.getElementById("tx-list");
   el.textContent = "読み込み中…";
 
   const address = appState.currentAddress.toString();
-  const url = `${appState.NODE}/transactions/confirmed?address=${address}&order=desc&limit=10`;
+  const params = new URLSearchParams({
+    address,
+    embedded: true,
+    order: "desc",
+    limit: 10
+  });
+  const url = `${appState.NODE}/transactions/confirmed?${params}`;
 
   try {
     const res = await fetch(url);
@@ -157,18 +174,17 @@ export async function loadRecentTx() {
       txMap[meta.hash] = txInfo;
       return createTxCard(txInfo);
     }).join("");
-
-  } catch (e) {
+  } catch(e) {
     console.error(e);
     el.textContent = "読み込みエラー";
   }
 }
 
 /* ============================================================
-   Live Transaction
+   WebSocket Live Tx
 ============================================================ */
 export function initLiveTx(address) {
-  // 未承認トランザクションの検知
+  /* 未承認 */
   addCallback(`unconfirmedAdded/${address}`, payload => {
     const tx = payload.data;
     const hash = tx.meta.hash;
@@ -190,14 +206,13 @@ export function initLiveTx(address) {
     appendTx(txInfo);
   });
 
-  // 承認トランザクションの検知
+  /* 承認済み */
   addCallback(`confirmedAdded/${address}`, async payload => {
     const tx = payload.data;
     const hash = tx.meta.hash;
 
     const blockTs = await getBlockTimestamp(tx.meta.height);
     const amountInfo = extractAmount(tx.transaction);
-
     const txInfo = {
       hash,
       sender: appState.currentAddress.toString(),
