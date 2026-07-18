@@ -102,6 +102,11 @@ export const appState = {
     }
   */
   mosaicInfo: {},
+
+  mnemonic:null,
+  privateKey:null,
+  currentPubKey:null,
+  currentAddress:null,
 };
 
 // ============================================================
