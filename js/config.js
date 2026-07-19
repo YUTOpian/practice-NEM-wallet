@@ -58,8 +58,14 @@ export const appState = {
   // 現在利用中Node
   NODE: null,
 
+  // 接続方式: "sss" | "mnemonic"
+  connectionMode: null,
+
   // Transaction用
   epochAdjustment: 0,
+
+  // ネットワークのgenerationHash（QRコード生成などで使用）
+  generationHash: null,
 
   // Symbol SDK v3
   facade: null,
@@ -102,11 +108,6 @@ export const appState = {
     }
   */
   mosaicInfo: {},
-
-  mnemonic:null,
-  privateKey:null,
-  currentPubKey:null,
-  currentAddress:null,
 };
 
 // ============================================================
