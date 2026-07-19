@@ -4,6 +4,7 @@
 
 import { appState } from "./config.js";
 import { setStatus } from "./ui.js";
+import { requestSign } from "./signer.js";
 
 export async function sendTx() {
   /*
@@ -101,17 +102,12 @@ export async function sendTx() {
   const payload = appState.sdkCore.utils.uint8ToHex(tx.serialize());
 
   try {
-    setStatus("tx-status", "SSSで署名待ち...");
+    setStatus("tx-status", "署名待ち...");
 
     /*
-      SSS署名
+      署名（SSS or ニーモニック、どちらのモードでも共通インターフェース）
     */
-    window.SSS.setTransactionByPayload(payload);
-    const signed = await window.SSS.requestSign();
-
-    if (!signed?.payload) {
-      throw new Error("SSS signature failed");
-    }
+    const signed = await requestSign(payload);
 
     /*
       Announce
