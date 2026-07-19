@@ -122,8 +122,11 @@ async function decryptStoredMnemonic(password) {
    参考: symbol-sdk v3 Bip32 / SymbolFacade.bip32Path / bip32NodeToKeyPair
 ============================================================ */
 function deriveKeyPairFromMnemonic(mnemonic, accountIndex) {
+  // テキストエリアからの改行や連続スペースを単一スペースに正規化
+  const normalized = mnemonic.trim().replace(/\s+/g, " ");
+
   const bip32 = new appState.sdkCore.Bip32();
-  const bip32Node = bip32.fromMnemonic(mnemonic.trim(), "");
+  const bip32Node = bip32.fromMnemonic(normalized, "");
 
   const bip32Path = appState.facade.bip32Path(accountIndex);
   const childNode = bip32Node.derivePath(bip32Path);
