@@ -1,28 +1,19 @@
 // index.js
 
 import { appState } from "./config.js";
+import { connectSSS } from "./sss.js";
+import { importMnemonic, unlockStoredMnemonic, hasStoredMnemonic, forgetStoredMnemonic } from "./mnemonic.js";
 import { sendTx } from "./transfer.js";
-import { loadRecentTx, initLiveTx } from "./transactions.js";
-import { initWebSocket } from "./ws.js";
 import { showPopup } from "./utils.js";
-import { checkHarvestStatus, startHarvest } from "./harvest.js";
+import { checkHarvestStatus, startHarvest, stopHarvest, loadHarvestNodeCandidates } from "./harvest.js";
 import QRCode from "https://esm.sh/qrcode";
+import { QRCodeGenerator } from "https://esm.sh/symbol-qr-library";
 
 window.addEventListener("load", async () => {
   // ============================
-  // SSS初期化
-  // ============================
-  await new Promise(resolve => setTimeout(resolve, 1000));
-  await autoConnectSSS();
-
-  if (!window.SSS || !window.SSS.activePublicKey) {
-    showPopup("⚠️ SSS Extension とリンクしてください", true);
-    return;
-  }
-
-  // ============================
   // ページ取得
   // ============================
+  const connectPage = document.getElementById("connect-page");
   const accountPage = document.getElementById("account-page");
   const sendPage = document.getElementById("send-page");
   const transferPage = document.getElementById("transfer-page");
@@ -38,6 +29,83 @@ window.addEventListener("load", async () => {
     });
     page.classList.add("active");
   }
+
+  // ============================
+  // 接続完了後: アカウント画面へ
+  // ============================
+  function onConnected() {
+    showPage(accountPage);
+  }
+
+  // ============================
+  // SSS Extensionで接続
+  // ============================
+  document.getElementById("connect-sss-btn")?.addEventListener("click", async () => {
+    if (!window.SSS) {
+      showPopup("⚠️ SSS Extensionが見つかりません", true);
+      return;
+    }
+    try {
+      await connectSSS();
+      if (!appState.currentAddress) {
+        showPopup("⚠️ SSSでアカウントを選択してください", true);
+        return;
+      }
+      onConnected();
+    } catch (e) {
+      console.error("SSS接続エラー:", e);
+      showPopup("❌ SSS接続に失敗しました", true);
+    }
+  });
+
+  // ============================
+  // ニーモニックログイン
+  // ============================
+  if (hasStoredMnemonic()) {
+    const storedBox = document.getElementById("mnemonic-has-stored");
+    if (storedBox) storedBox.style.display = "block";
+  }
+
+  document.getElementById("mnemonic-unlock-btn")?.addEventListener("click", async () => {
+    const password = document.getElementById("mnemonic-password-input")?.value ?? "";
+    const isTestnet = document.getElementById("mnemonic-network-select")?.value === "testnet";
+
+    try {
+      await unlockStoredMnemonic(password, { isTestnet, accountIndex: 0 });
+      onConnected();
+    } catch (e) {
+      console.error("ニーモニックログインエラー:", e);
+      showPopup("❌ " + e.message, true);
+    }
+  });
+
+  document.getElementById("mnemonic-forget-btn")?.addEventListener("click", () => {
+    if (!confirm("保存されたニーモニックを削除します。よろしいですか？")) return;
+    forgetStoredMnemonic();
+    const storedBox = document.getElementById("mnemonic-has-stored");
+    if (storedBox) storedBox.style.display = "none";
+    showPopup("保存されたニーモニックを削除しました");
+  });
+
+  document.getElementById("mnemonic-import-btn")?.addEventListener("click", async () => {
+    const mnemonic = document.getElementById("mnemonic-input")?.value.trim() ?? "";
+    const isTestnet = document.getElementById("mnemonic-network-select")?.value === "testnet";
+    const accountIndex = Number(document.getElementById("mnemonic-account-index")?.value || 0);
+    const password = document.getElementById("mnemonic-new-password")?.value ?? "";
+
+    if (!mnemonic) {
+      showPopup("⚠️ ニーモニックを入力してください", true);
+      return;
+    }
+
+    try {
+      await importMnemonic(mnemonic, { isTestnet, accountIndex, password: password || null });
+      onConnected();
+    } catch (e) {
+      console.error("ニーモニックインポートエラー:", e);
+      showPopup("❌ インポートに失敗しました: " + e.message, true);
+    }
+  });
 
   // ============================
   // 送金画面
@@ -79,16 +147,41 @@ window.addEventListener("load", async () => {
   document.getElementById("receive-btn")?.addEventListener("click", async () => {
     showPage(receivePage);
     const address = appState.currentAddress.toString();
-    
+
     document.getElementById("receive-address").textContent = address;
     const qr = document.getElementById("receive-qrcode");
-    qr.innerHTML = "";
+    qr.innerHTML = "生成中...";
 
-    const dataUrl = await QRCode.toDataURL(address, {
-      width: 220,
-      margin: 1
-    });
-    qr.innerHTML = `<img src="${dataUrl}" alt="QR Code">`;
+    try {
+      // Symbol公式のAddressQR形式（symbol-qr-library）でQRコードを生成する。
+      // 単なるアドレス文字列のQRだと、他のSymbolウォレット（EXYM Walletなど）が
+      // アドレスQRとして認識できないため。
+      if (!appState.generationHash) {
+        throw new Error("generationHashが未取得です（SDK初期化未完了の可能性）");
+      }
+
+      const walletName = "Symbol Simple Wallet";
+      const qrCode = QRCodeGenerator.createExportAddress(
+        walletName,
+        address,
+        appState.networkType, // 104:MAINNET / 152:TESTNET （数値はSDK v2でも同じ）
+        appState.generationHash
+      );
+
+      // toBase64() は Observable を返すのでsubscribeで受け取る
+      qrCode.toBase64().subscribe({
+        next: (base64) => {
+          qr.innerHTML = `<img src="data:image/png;base64,${base64}" alt="Address QR Code">`;
+        },
+        error: (e) => {
+          console.error("QRコード生成エラー(symbol-qr-library):", e);
+          qr.innerHTML = "QRコード生成に失敗しました（コンソールを確認してください）";
+        }
+      });
+    } catch (e) {
+      console.error("QRコード生成エラー:", e);
+      qr.innerHTML = "QRコード生成に失敗しました（コンソールを確認してください）";
+    }
   });
 
   // ============================
@@ -98,14 +191,16 @@ window.addEventListener("load", async () => {
     showPage(harvestPage);
     const address = appState.currentAddress.toString();
     document.getElementById("harvest-address").textContent = address;
-    
+
     await checkHarvestStatus();
+    await loadHarvestNodeCandidates();
   });
 
   // ============================
   // ハーベスト開始
   // ============================
   document.getElementById("start-harvest-btn")?.addEventListener("click", startHarvest);
+  document.getElementById("stop-harvest-btn")?.addEventListener("click", stopHarvest);
 
   // ============================
   // 戻る
@@ -144,16 +239,4 @@ window.addEventListener("load", async () => {
     navigator.clipboard.writeText(appState.currentAddress.toString());
     showPopup("アドレスをコピーしました");
   });
-
-  // ============================
-  // Tx履歴・WebSocket
-  // ============================
-  await loadRecentTx();
-
-  if (appState.currentAddress) {
-    initWebSocket(appState.currentAddress.toString());
-    initLiveTx(appState.currentAddress.toString());
-  }
 });
-
-          
