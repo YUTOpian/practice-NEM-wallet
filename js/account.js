@@ -1,18 +1,41 @@
 // account.js
-// Account情報取得・Mosaic残高取得
+// Account情報取得・XEM/モザイク残高取得 (NIS1 REST API)
 
-import { appState } from "./config.js";
-import { setText, setStatus } from "./ui.js";
+import { appState, XEM_MOSAIC_KEY, XEM_DIVISIBILITY } from "./config.js";
+import { setStatus } from "./ui.js";
 import { formatMosaicAmount } from "./utils.js";
 
-function toHexMosaicId(id) {
-  if (typeof id === "string") {
-    return id.toUpperCase();
+function mosaicKey(namespaceId, name) {
+  return `${namespaceId}:${name}`;
+}
+
+/* ============================================================
+   モザイク定義(可分性など)の取得。ネームスペース単位でまとめて取得しキャッシュする
+============================================================ */
+const definitionCache = {};
+
+async function fetchMosaicDivisibility(namespaceId, name) {
+  const key = mosaicKey(namespaceId, name);
+  if (key === XEM_MOSAIC_KEY) return XEM_DIVISIBILITY;
+  if (definitionCache[key] != null) return definitionCache[key];
+
+  try {
+    const res = await fetch(
+      `${appState.NODE}/namespace/mosaic/definition/page?namespace=${encodeURIComponent(namespaceId)}&pageSize=100`
+    );
+    const json = await res.json();
+    for (const item of json?.data ?? []) {
+      const id = item.mosaic?.id ?? item.id;
+      const k = mosaicKey(id?.namespaceId, id?.name);
+      const props = item.mosaic?.properties ?? item.properties ?? [];
+      const divProp = props.find((p) => p.name === "divisibility");
+      definitionCache[k] = divProp ? parseInt(divProp.value, 10) : 0;
+    }
+  } catch (e) {
+    console.warn("モザイク定義取得失敗", namespaceId, e);
   }
-  return BigInt(id)
-    .toString(16)
-    .toUpperCase()
-    .padStart(16, "0");
+
+  return definitionCache[key] ?? 0;
 }
 
 export async function refreshAccount() {
@@ -26,178 +49,79 @@ export async function refreshAccount() {
     const address = appState.currentAddress.toString();
     document.getElementById("account-address").textContent = address;
 
-    /*
-      Account情報取得
-      quick_learning_symbol_v3形式
-      accountInfo = json.account
-    */
-    const accountInfo = await fetch(
-      new URL("/accounts/" + address, appState.NODE),
-      {
-        method: "GET",
-        headers: {
-          "Content-Type": "application/json"
-        }
-      }
-    )
-    .then((res) => {
-      if (res.status === 404) {
-        return null;
-      }
-      return res.json();
-    })
-    .then((json) => {
-      return json ? json.account : null;
-    });
+    const accountRes = await fetch(
+      `${appState.NODE}/account/get?address=${encodeURIComponent(address)}`
+    );
 
-    /*
-      未登録Account
-    */
-    if (!accountInfo) {
-      console.log("未登録Account");
+    if (!accountRes.ok) {
+      console.log("未登録Account、または取得失敗");
       appState.mosaicInfo = {};
-      document.getElementById("account-balance").textContent = "0.000 XYM";
-
+      document.getElementById("account-balance").textContent = "0.000000 XEM";
       const mosaicList = document.getElementById("mosaic-list");
-      if (mosaicList) {
-        mosaicList.innerHTML = "<div>保有Mosaicはありません</div>";
-      }
-
-      setStatus("account-status", "新規Accountです", "success");
+      if (mosaicList) mosaicList.innerHTML = "<div>保有Mosaicはありません</div>";
+      setStatus("account-status", "新規Accountです(まだ受信履歴がありません)", "success");
       return;
     }
 
-    /*
-      所有Mosaic一覧
-      quick_learning_symbol_v3: accountInfo.mosaics
-    */
-    const mosaics = accountInfo.mosaics || [];
+    const accountJson = await accountRes.json();
+    const accountInfo = accountJson.account;
+
+    appState.accountInfo = accountInfo;
 
     /*
-      Namespace取得
-      MosaicId → Namespace名
+      XEM残高 (account.balance は raw micro-XEM)
     */
-    const namespaceMap = {};
-    const mosaicIds = mosaics.map((mosaic) => {
-      return toHexMosaicId(mosaic.id);
-    });
-
-    try {
-      const namespaceInfo = await fetch(
-        new URL("/namespaces/mosaic/names", appState.NODE),
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json"
-          },
-          body: JSON.stringify({ mosaicIds })
-        }
-      ).then((res) => res.json());
-
-      for (const item of namespaceInfo.mosaicNames || []) {
-        const mosaicId = item.mosaicId.toUpperCase();
-        if (item.names && item.names.length > 0) {
-          namespaceMap[mosaicId] = item.names[0];
-        }
-      }
-    } catch(e) {
-      console.warn("Namespace取得失敗", e);
-    }
+    const xemBalanceRaw = accountInfo?.balance ?? 0;
 
     /*
-      Mosaic情報初期化
+      保有モザイク一覧
     */
+    const mosaicsRes = await fetch(
+      `${appState.NODE}/account/mosaic/owned?address=${encodeURIComponent(address)}`
+    );
+    const mosaicsJson = await mosaicsRes.json();
+    const ownedMosaics = mosaicsJson?.data ?? [];
+
     appState.mosaicInfo = {};
 
     const mosaicList = document.getElementById("mosaic-list");
-    if (mosaicList) {
-      mosaicList.innerHTML = "";
-    }
+    if (mosaicList) mosaicList.innerHTML = "";
 
     const select = document.getElementById("tx-mosaic");
-    if (select) {
-      select.innerHTML = "";
+    if (select) select.innerHTML = "";
+
+    // まずXEM自体を先頭に登録
+    appState.mosaicInfo[XEM_MOSAIC_KEY] = {
+      mosaicName: "XEM",
+      amount: xemBalanceRaw,
+      divisibility: XEM_DIVISIBILITY,
+    };
+
+    const mosaicInfoList = [
+      { mosaicId: XEM_MOSAIC_KEY, mosaicAmount: xemBalanceRaw, divisibility: XEM_DIVISIBILITY, mosaicName: "XEM" },
+    ];
+
+    for (const item of ownedMosaics) {
+      const id = item.mosaicId;
+      const key = mosaicKey(id.namespaceId, id.name);
+      if (key === XEM_MOSAIC_KEY) continue; // xemは上で登録済み(通常ここには出てこない)
+
+      const divisibility = await fetchMosaicDivisibility(id.namespaceId, id.name);
+      const mosaicName = `${id.namespaceId}:${id.name}`;
+
+      mosaicInfoList.push({
+        mosaicId: key,
+        mosaicAmount: item.quantity,
+        divisibility,
+        mosaicName,
+      });
     }
 
-    /*
-      Mosaic情報取得
-    */
-    const mosaicInfoList = await Promise.all(
-      mosaics.map(async (mosaic) => {
-        const mosaicId = toHexMosaicId(mosaic.id);
-
-        /*
-          所有量
-          quick_learning_symbol_v3: accountInfo.mosaics[0].amount
-        */
-        const mosaicAmount = mosaic.amount;
-        let mosaicName = namespaceMap[mosaicId] ?? mosaicId;
-        let divisibility = 0;
-
-        /*
-          XYM
-          Native Mosaic
-        */
-        if (mosaicId === "72C0212E67A08BCE" || mosaicId === "6BED913FA20223F8") {
-          mosaicName = "XYM";
-          divisibility = 6;
-        } else {
-          try {
-            /*
-              MosaicInfo取得
-              quick_learning_symbol_v3:
-              mosaicInfo = await fetch(/mosaics/{id})
-            */
-            const mosaicInfo = await fetch(
-              new URL("/mosaics/" + mosaicId, appState.NODE),
-              {
-                method: "GET",
-                headers: {
-                  "Content-Type": "application/json"
-                }
-              }
-            )
-            .then((res) => res.json())
-            .then((json) => json.mosaic);
-
-            /*
-              可分性
-              v3: mosaicInfo.divisibility
-            */
-            divisibility = mosaicInfo.divisibility;
-          } catch(e) {
-            console.warn("MosaicInfo取得失敗", mosaicId, e);
-          }
-        }
-
-        return {
-          mosaicId,
-          mosaicAmount,
-          divisibility,
-          mosaicName
-        };
-      })
-    );
-
-    /*
-      Account Mosaic表示
-    */
     for (const mosaic of mosaicInfoList) {
       const { mosaicId, mosaicAmount, divisibility, mosaicName } = mosaic;
 
-      /*
-        内部保存
-        amountはREST API v3形式を維持
-      */
-      appState.mosaicInfo[mosaicId] = {
-        mosaicName,
-        amount: mosaicAmount,
-        divisibility
-      };
+      appState.mosaicInfo[mosaicId] = { mosaicName, amount: mosaicAmount, divisibility };
 
-      /*
-        Transfer用Mosaic選択
-      */
       if (select) {
         const option = document.createElement("option");
         option.value = mosaicId;
@@ -205,20 +129,13 @@ export async function refreshAccount() {
         select.appendChild(option);
       }
 
-      /*
-        Account Mosaic一覧表示
-      */
       if (mosaicList) {
-        const item = document.createElement("div");
-        item.className = "mosaic-item";
+        const displayItem = document.createElement("div");
+        displayItem.className = "mosaic-item";
 
-        const displayName = (mosaicId === "72C0212E67A08BCE" || mosaicId === "6BED913FA20223F8")
-          ? "XYM"
-          : (namespaceMap[mosaicId] ?? mosaicName);
-
-        item.innerHTML = `
+        displayItem.innerHTML = `
           <div class="mosaic-left">
-            <div class="mosaic-name">${displayName}</div>
+            <div class="mosaic-name">${mosaicName}</div>
             <div class="mosaic-id">${mosaicId}</div>
           </div>
           <div class="mosaic-right">
@@ -226,77 +143,50 @@ export async function refreshAccount() {
           </div>
         `;
 
-        item.onclick = () => {
-          console.log("Mosaic選択:", mosaicId);
-
-          if (select) {
-            select.value = mosaicId;
-          }
+        displayItem.onclick = () => {
+          if (select) select.value = mosaicId;
 
           const idElement = document.getElementById("selected-mosaic-id");
           if (idElement) {
-            "value" in idElement ? idElement.value = mosaicId : idElement.textContent = mosaicId;
+            "value" in idElement ? (idElement.value = mosaicId) : (idElement.textContent = mosaicId);
           }
 
           const nameElement = document.getElementById("selected-mosaic-name");
-          if (nameElement) {
-            nameElement.textContent = displayName;
-          }
+          if (nameElement) nameElement.textContent = mosaicName;
 
           const balanceElement = document.getElementById("selected-mosaic-balance");
-          if (balanceElement) {
-            balanceElement.textContent = formatMosaicAmount(mosaicAmount, divisibility);
-          }
+          if (balanceElement) balanceElement.textContent = formatMosaicAmount(mosaicAmount, divisibility);
 
           const dialog = document.getElementById("transfer-dialog");
-          if (dialog && typeof dialog.showModal === "function") {
-            dialog.showModal();
-          }
+          if (dialog && typeof dialog.showModal === "function") dialog.showModal();
         };
 
-        mosaicList.appendChild(item);
+        mosaicList.appendChild(displayItem);
       }
     }
 
-    /*
-      XYM残高表示
-      Native Mosaic
-    */
-    const xymId = appState.networkType === 152 ? "72C0212E67A08BCE" : "6BED913FA20223F8";
-    const xym = appState.mosaicInfo[xymId];
-
-    document.getElementById("account-balance").textContent = xym
-      ? `${formatMosaicAmount(xym.amount, xym.divisibility)} XYM`
-      : "0.000 XYM";
+    document.getElementById("account-balance").textContent =
+      `${formatMosaicAmount(xemBalanceRaw, XEM_DIVISIBILITY)} XEM`;
 
     setStatus("account-status", "取得成功", "success");
-  } catch(e) {
+  } catch (e) {
     console.error(e);
     setStatus("account-status", "取得に失敗しました", "error");
   }
 }
 
 /*
-  受信者Account PublicKey取得
-  quick_learning_symbol_v3: accountInfo.publicKey
+  受信者Account PublicKey取得 (暗号化メッセージ送信用)
 */
 export async function getRecipientPublicKey(address) {
-  const accountInfo = await fetch(
-    new URL("/accounts/" + address.toString(), appState.NODE),
-    {
-      method: "GET",
-      headers: {
-        "Content-Type": "application/json"
-      }
-    }
-  )
-  .then((res) => res.json())
-  .then((json) => json.account);
+  const res = await fetch(
+    `${appState.NODE}/account/get?address=${encodeURIComponent(address.toString())}`
+  );
+  const json = await res.json();
+  const publicKey = json?.account?.publicKey;
 
-  const publicKey = accountInfo.publicKey;
-
-  if (!publicKey || publicKey === "0000000000000000000000000000000000000000000000000000000000000000") {
-    throw new Error("受信者のPublicKeyが存在しません");
+  if (!publicKey) {
+    throw new Error("受信者のPublicKeyが取得できません(このアドレスは一度も送信を行ったことがない可能性があります)");
   }
 
   return publicKey;
