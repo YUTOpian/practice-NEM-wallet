@@ -1,26 +1,26 @@
 // harvest.js
-// 委任ハーベスティング (Delegated Harvesting) フル実装
+// 委任ハーベスティング (Delegated / Remote Harvesting) — NEM(NIS1)版
 //
-// 手順:
-//   ① AccountKeyLinkTransaction  … メインアカウントの重要度をリモート署名アカウントへ委任
-//   ② VrfKeyLinkTransaction      … VRF鍵をメインアカウントにリンク（委任ハーベスト必須）
-//   ③ NodeKeyLinkTransaction     … どのノードに委任するかをオンチェーンで宣言
-//   ①②③は1つのAggregate Complete Transactionにまとめ、SSSで署名してアナウンスする
-//   ④ PersistentDelegationRequestTransaction
-//        … リモート鍵・VRF鍵の秘密鍵を「ノード宛」に暗号化したメッセージとして
-//          TransferTransactionに載せて送る。これでノードがハーベスト委任を認識する。
+// NEMの委任ハーベストはSymbolよりずっとシンプル:
+//   ① ImportanceTransferTransaction(mode: ACTIVATE) で
+//      「リモートアカウント」を1つ指定し、自分の重要度(importance)を委任する
+//      (Symbolのような VRF鍵/ノード鍵リンクや PersistentDelegationRequest は不要)
+//   ② 委任先ノードに対して、そのリモートアカウントの秘密鍵を
+//      POST /account/unlock で伝え、そのノードにハーベストを代行してもらう
+//      (ノードを自分で信頼する必要がある。悪意あるノードには渡さないこと)
 //
-// 参考: https://docs.symbol.dev/concepts/harvesting.html
-//       https://docs.symbol.dev/guides/harvesting/activating-delegated-harvesting-manual.html
+// 解除は同トランザクションを mode: DEACTIVATE で送るだけ。
+//
+// ⚠️ ImportanceTransferTransactionディスクリプタの引数は
+//   Symbol版実装のパターンから類推している。実行前に
+//   `appState.sdkNem.descriptors` の内容を確認してください。
 
-import { appState, MAINNET_NODEWATCH_URL, TESTNET_NODEWATCH_URL, NetworkType } from "./config.js";
-import { setStatus } from "./ui.js";
-import { requestSign } from "./signer.js";
+import { appState, NetworkType } from "./config.js";
+import { fetchReachablePeers } from "./nodeSelector.js";
+import { signAndAnnounceTx } from "./auth.js";
 
 /* ============================================================
-   委任先ノード候補の読み込み（NodeWatchから取得しプルダウンに反映）
-   ※ ここで出てくるのは単にオンラインなノード一覧であり、
-     「委任ハーベスティングを受け付けている」保証はない。
+   委任先ノード候補の読み込み(現在接続中ノードのピア一覧から)
 ============================================================ */
 export async function loadHarvestNodeCandidates() {
   const select = document.getElementById("harvest-node-select");
@@ -28,38 +28,23 @@ export async function loadHarvestNodeCandidates() {
 
   select.innerHTML = `<option value="">-- 候補を読み込み中... --</option>`;
 
-  const isTestnet = appState.networkType === NetworkType.TESTNET;
-  const url = isTestnet ? TESTNET_NODEWATCH_URL : MAINNET_NODEWATCH_URL;
-
   try {
-    const res = await fetch(url);
-    const nodes = await res.json();
+    const peers = await fetchReachablePeers(appState.NODE);
 
-    if (!Array.isArray(nodes) || nodes.length === 0) {
-      throw new Error("empty");
+    if (peers.length === 0) {
+      select.innerHTML = `<option value="">-- 候補が見つかりません(下に直接URLを入力してください) --</option>`;
+      return;
     }
-
-    nodes.sort((a, b) => b.height - a.height);
 
     select.innerHTML =
       `<option value="">-- ノードを選択（未選択なら接続中ノードを使用）--</option>` +
-      nodes
-        .slice(0, 30)
-        .map((n) => {
-          const label = `${n.endpoint}（高さ:${n.height}）`;
-          return `<option value="${n.endpoint}">${label}</option>`;
-        })
-        .join("");
+      peers.map((url) => `<option value="${url}">${url}</option>`).join("");
   } catch (e) {
     console.warn("ノード候補の取得に失敗しました", e);
     select.innerHTML = `<option value="">-- 候補の取得に失敗（下に直接URLを入力してください）--</option>`;
   }
 }
 
-/* ============================================================
-   実際に使用する委任先ノードURLを決定
-   優先順位: 直接入力欄 > プルダウン選択 > 現在接続中のノード(appState.NODE)
-============================================================ */
 function getSelectedHarvestNodeUrl() {
   const manual = document.getElementById("harvest-node-input")?.value?.trim();
   if (manual) return manual;
@@ -71,37 +56,14 @@ function getSelectedHarvestNodeUrl() {
 }
 
 /* ============================================================
-   直近生成したリモート鍵・VRF鍵（セッション内のみ保持）
-   ページをリロードすると消えるので、④が失敗した場合に備えて
-   画面にも表示してユーザーに控えてもらう。
+   直近生成したリモート鍵（セッション内のみ保持）
+   委任解除の際に使う。リロードすると消えるため、画面にも控えてもらう。
 ============================================================ */
-let lastGeneratedKeys = null;
-
-/* ============================================================
-   ランダム秘密鍵生成（32byte）
-============================================================ */
-function randomPrivateKey() {
-  const bytes = crypto.getRandomValues(new Uint8Array(32));
-  return new appState.sdkCore.PrivateKey(bytes);
-}
+let lastRemoteKeys = null;
 
 function toHex(bytesOrKey) {
   const bytes = bytesOrKey.bytes ?? bytesOrKey;
   return appState.sdkCore.utils.uint8ToHex(bytes);
-}
-
-/* ============================================================
-   ノード公開鍵取得 (/node/info の nodePublicKey)
-   ※ これは NodeKeyLinkTransaction 用の鍵であり、
-     REST証明書(CA)公開鍵とは別物なので注意
-============================================================ */
-async function fetchNodePublicKey(nodeUrl) {
-  const res = await fetch(new URL("/node/info", nodeUrl));
-  const info = await res.json();
-  if (!info.nodePublicKey) {
-    throw new Error(`ノード(${nodeUrl})から nodePublicKey を取得できませんでした`);
-  }
-  return new appState.sdkCore.PublicKey(info.nodePublicKey);
 }
 
 /* ============================================================
@@ -124,9 +86,10 @@ export async function checkHarvestStatus() {
     setBadge("", "確認中...");
 
     const address = appState.currentAddress.toString();
-    const res = await fetch(`${appState.NODE}/accounts/${address}`);
+    const res = await fetch(`${appState.NODE}/account/get?address=${encodeURIComponent(address)}`);
     const json = await res.json();
     const account = json.account;
+    const meta = json.meta;
 
     if (!account) {
       statusEl.textContent = "アカウント情報取得失敗";
@@ -134,32 +97,21 @@ export async function checkHarvestStatus() {
       return;
     }
 
-    const importance = account.importance;
-    console.log("importance:", importance);
+    const importance = account.importance ?? 0;
+    if (importanceEl) importanceEl.textContent = importance.toString();
 
-    if (importanceEl) {
-      importanceEl.textContent = importance ? BigInt(importance).toString() : "0";
-    }
+    // remoteStatus: "ACTIVE"(委任中) / "ACTIVATING" / "INACTIVE" / "DEACTIVATING" / "REMOTE"(自分がリモート役)
+    const remoteStatus = meta?.remoteStatus ?? "INACTIVE";
 
-    // supplementalPublicKeys の有無で委任状況を判定
-    const keys = account.supplementalPublicKeys;
-    const linked = !!keys?.linked;
-    const vrf = !!keys?.vrf;
-    const node = !!keys?.node;
-    const linkedInfo = `remote:${linked} vrf:${vrf} node:${node}`;
-
-    if (linked && vrf && node) {
-      setBadge("active", "✅ 委任ハーベスティング設定済み（鍵リンク完了）");
-    } else if (linked || vrf || node) {
-      setBadge("partial", "⚠️ 一部の鍵のみリンク済み（設定不完全）");
+    if (remoteStatus === "ACTIVE") {
+      setBadge("active", "✅ 委任ハーベスティング設定済み");
+    } else if (remoteStatus === "ACTIVATING" || remoteStatus === "DEACTIVATING") {
+      setBadge("partial", `⚠️ 反映待ち (${remoteStatus})`);
     } else {
       setBadge("inactive", "❌ 委任ハーベスティング未設定");
     }
 
-    statusEl.textContent =
-      importance && Number(importance) > 0
-        ? `重要度あり ${linkedInfo}`
-        : `重要度なし ${linkedInfo}`;
+    statusEl.textContent = `重要度: ${importance} / remoteStatus: ${remoteStatus} / harvestedBlocks: ${account.harvestedBlocks ?? 0}`;
   } catch (e) {
     console.error("Harvest status error:", e);
     statusEl.textContent = "状態取得エラー";
@@ -168,170 +120,82 @@ export async function checkHarvestStatus() {
 }
 
 /* ============================================================
-   トランザクション確認待ち（承認 or 失敗まで polling）
+   トランザクション確認待ち
+   NIS1には /transactionStatus/{hash} のようなAPIが無いため、
+   「未承認一覧から消えたら承認されたとみなす」簡易実装にしている。
 ============================================================ */
-async function waitConfirmed(hash, { timeoutMs = 60000, intervalMs = 3000 } = {}) {
+async function waitConfirmed(hash, address, { timeoutMs = 90000, intervalMs = 4000 } = {}) {
   const start = Date.now();
 
   while (Date.now() - start < timeoutMs) {
     try {
-      const res = await fetch(`${appState.NODE}/transactionStatus/${hash}`);
-      if (res.ok) {
-        const json = await res.json();
-        if (json.group === "confirmed") return true;
-        if (json.group === "failed") {
-          throw new Error("Transaction failed: " + (json.code ?? "unknown"));
-        }
-      }
+      const res = await fetch(
+        `${appState.NODE}/account/unconfirmedTransactions?address=${encodeURIComponent(address)}`
+      );
+      const json = await res.json();
+      const items = json.data ?? [];
+      const stillPending = items.some((item) => {
+        const h = item.meta?.hash?.data ?? item.meta?.hash;
+        return h === hash;
+      });
+      if (!stillPending) return true;
     } catch (e) {
-      // 404 = まだunconfirmedにも乗っていない可能性があるので継続
       console.warn("waitConfirmed polling error:", e);
     }
     await new Promise((r) => setTimeout(r, intervalMs));
   }
 
-  throw new Error("承認待ちがタイムアウトしました");
+  throw new Error("承認待ちがタイムアウトしました(ネットワーク混雑時はもう少しお待ちください)");
 }
 
 /* ============================================================
-   SSSで署名 → アナウンス（共通処理）
+   ステーキング(ハーベスト)履歴
+   NIS1: GET /account/harvests?address=
 ============================================================ */
-async function signAndAnnounce(tx) {
-  const payload = appState.sdkCore.utils.uint8ToHex(tx.serialize());
+export async function loadHarvestHistory() {
+  const el = document.getElementById("harvest-history");
+  if (!el) return;
 
-  const signed = await requestSign(payload);
+  el.textContent = "読み込み中...";
 
-  const res = await fetch(new URL("/transactions", appState.NODE), {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ payload: signed.payload }),
-  });
-
-  const result = await res.json();
-  console.log("announce result:", result);
-
-  if (!res.ok) {
-    throw new Error(result.message ?? "アナウンス失敗");
-  }
-
-  // ★ハッシュは「署名済み」のペイロードから計算し直す
-  //   （署名前のtxオブジェクトのままだと署名欄が空でハッシュが一致しない）
-  const signedBytes = appState.sdkCore.utils.hexToUint8(signed.payload);
-  const signedTx = appState.facade.transactionFactory.static.deserialize(signedBytes);
-  const hash = appState.facade.hashTransaction(signedTx).toString();
-  return hash;
-}
-
-/* ============================================================
-   ① + ② + ③ を1つのAggregate Complete Transactionにまとめて送信
-============================================================ */
-async function announceKeyLinks(remoteKeyPair, vrfKeyPair, nodePublicKey) {
-  const { descriptors, models } = appState.sdkSymbol;
-
-  const embedded = [
-    appState.facade.createEmbeddedTransactionFromTypedDescriptor(
-      new descriptors.AccountKeyLinkTransactionV1Descriptor(
-        remoteKeyPair.publicKey,
-        models.LinkAction.LINK
-      ),
-      appState.currentPubKey
-    ),
-    appState.facade.createEmbeddedTransactionFromTypedDescriptor(
-      new descriptors.VrfKeyLinkTransactionV1Descriptor(
-        vrfKeyPair.publicKey,
-        models.LinkAction.LINK
-      ),
-      appState.currentPubKey
-    ),
-    appState.facade.createEmbeddedTransactionFromTypedDescriptor(
-      new descriptors.NodeKeyLinkTransactionV1Descriptor(
-        nodePublicKey,
-        models.LinkAction.LINK
-      ),
-      appState.currentPubKey
-    ),
-  ];
-
-  const aggregateDescriptor = new descriptors.AggregateCompleteTransactionV2Descriptor(
-    appState.facade.static.hashEmbeddedTransactions(embedded),
-    embedded
-  );
-
-  const aggregateTx = appState.facade.createTransactionFromTypedDescriptor(
-    aggregateDescriptor,
-    appState.currentPubKey,
-    100,
-    60 * 60
-  );
-
-  return await signAndAnnounce(aggregateTx);
-}
-
-/* ============================================================
-   ④ PersistentDelegationRequestTransaction の作成・送信
-   ※ ここは symbol-sdk のバージョンによってAPI名が変わりやすい部分。
-     見つからない場合は encoder のプロパティ一覧をconsoleに出して
-     原因を特定できるようにしている。
-============================================================ */
-async function announcePersistentDelegationRequest(remoteKeyPair, vrfKeyPair, nodePublicKey) {
-  const { descriptors, MessageEncoder } = appState.sdkSymbol;
-
-  if (typeof MessageEncoder !== "function") {
-    throw new Error(
-      "このSDKバージョンには MessageEncoder が見つかりません。sdk.js で読み込んでいる " +
-      "symbol-sdk のバンドル内容を console.log(appState.sdkSymbol) で確認してください。"
-    );
-  }
-
-  // 暗号化自体はメインアカウントの秘密鍵を必要としない
-  // （SDKが内部でephemeralな鍵を都度生成しノード公開鍵とECDHするため）。
-  // encoder の生成にダミーのKeyPairが必要なSDKもあるので、その場合は
-  // ランダム鍵で作ったAccount相当のオブジェクトを渡す。
-  let encodedMessage;
   try {
-    const dummyKeyPair = new appState.sdkSymbol.KeyPair(randomPrivateKey());
-    const encoder = new MessageEncoder(dummyKeyPair);
-
-    if (typeof encoder.encodePersistentHarvestingDelegation === "function") {
-      encodedMessage = encoder.encodePersistentHarvestingDelegation(
-        nodePublicKey,
-        remoteKeyPair,
-        vrfKeyPair
-      );
-    } else {
-      console.warn(
-        "encodePersistentHarvestingDelegation が見つかりません。利用可能なメソッド:",
-        Object.getOwnPropertyNames(Object.getPrototypeOf(encoder))
-      );
-      throw new Error("MessageEncoderに委任メッセージ用のメソッドが見つかりませんでした");
+    if (!appState.NODE || !appState.currentAddress) {
+      throw new Error("アカウント未接続です");
     }
+
+    const address = appState.currentAddress.toString();
+    const res = await fetch(`${appState.NODE}/account/harvests?address=${encodeURIComponent(address)}`);
+    const json = await res.json();
+    const items = json.data ?? [];
+
+    if (items.length === 0) {
+      el.innerHTML = `<div>ハーベスト履歴はありません</div>`;
+      return;
+    }
+
+    el.innerHTML = items
+      .slice(0, 10)
+      .map((h) => {
+        const feeXem = h.totalFee
+          ? (Number(h.totalFee) / 1_000_000).toLocaleString("ja-JP", { maximumFractionDigits: 6 })
+          : "0";
+
+        return `
+          <div class="harvest-history-item">
+            <div>高さ: ${h.height}</div>
+            <div>獲得手数料(概算): ${feeXem} XEM</div>
+          </div>
+        `;
+      })
+      .join("");
   } catch (e) {
-    console.error("Persistent delegation message encode error:", e);
-    throw e;
+    console.error("loadHarvestHistory error:", e);
+    el.textContent = "履歴取得エラー";
   }
-
-  const nodeAddress = appState.sdkSymbol.Address.fromPublicKey
-    ? appState.sdkSymbol.Address.fromPublicKey(nodePublicKey, appState.networkType)
-    : appState.facade.network.publicKeyToAddress(nodePublicKey);
-
-  const transferDescriptor = new descriptors.TransferTransactionV1Descriptor(
-    nodeAddress,
-    [],
-    encodedMessage
-  );
-
-  const transferTx = appState.facade.createTransactionFromTypedDescriptor(
-    transferDescriptor,
-    appState.currentPubKey,
-    100,
-    60 * 60
-  );
-
-  return await signAndAnnounce(transferTx);
 }
 
 /* ============================================================
-   委任ハーベスティング開始（メインエントリポイント）
+   委任ハーベスティング開始
 ============================================================ */
 export async function startHarvest() {
   const statusEl = document.getElementById("harvest-status");
@@ -350,42 +214,61 @@ export async function startHarvest() {
       throw new Error("委任先ノードが指定されていません");
     }
 
-    setLine(`ノード情報取得中... (${harvestNodeUrl})`);
-    const nodePublicKey = await fetchNodePublicKey(harvestNodeUrl);
+    setLine("リモートアカウントの鍵を生成中...");
+    const remotePrivateKeyBytes = crypto.getRandomValues(new Uint8Array(32));
+    const remotePrivateKey = new appState.sdkCore.PrivateKey(remotePrivateKeyBytes);
+    const remoteKeyPair = new appState.facade.static.KeyPair(remotePrivateKey);
 
-    setLine("リモート鍵・VRF鍵を生成中...");
-    const remoteKeyPair = new appState.sdkSymbol.KeyPair(randomPrivateKey());
-    const vrfKeyPair = new appState.sdkSymbol.KeyPair(randomPrivateKey());
-
-    // 画面に残しておく（④が失敗しても後で再送できるように）
-    lastGeneratedKeys = {
-      remotePrivateKey: toHex(remoteKeyPair.privateKey),
-      vrfPrivateKey: toHex(vrfKeyPair.privateKey),
+    lastRemoteKeys = {
+      remotePrivateKey: toHex(remotePrivateKey),
+      remotePublicKey: remoteKeyPair.publicKey.toString(),
     };
     console.warn(
-      "生成したリモート鍵・VRF鍵の秘密鍵（この画面を閉じると失われます。再送が必要な場合のため控えてください）:",
-      lastGeneratedKeys
+      "生成したリモートアカウントの秘密鍵（この画面を閉じると失われます。解除の際に必要な場合があるため控えてください）:",
+      lastRemoteKeys
     );
 
-    setLine("① AccountKeyLink / ② VrfKeyLink / ③ NodeKeyLink をSSSで署名してください...");
-    const aggHash = await announceKeyLinks(remoteKeyPair, vrfKeyPair, nodePublicKey);
-    setLine(`鍵リンクTx送信済み (${aggHash.slice(0, 12)}...) 承認待ち...`);
+    const { descriptors, models } = appState.sdkNem;
 
-    await waitConfirmed(aggHash);
-    setLine("鍵リンク承認完了。④ 委任リクエストを送信します...");
-
-    const delegationHash = await announcePersistentDelegationRequest(
-      remoteKeyPair,
-      vrfKeyPair,
-      nodePublicKey
+    setLine("① ImportanceTransferTransaction(ACTIVATE)を署名しています...");
+    const descriptor = new descriptors.ImportanceTransferTransactionV1Descriptor(
+      models.ImportanceTransferMode.ACTIVATE,
+      remoteKeyPair.publicKey
+    );
+    const tx = appState.facade.createTransactionFromTypedDescriptor(
+      descriptor,
+      appState.currentPubKey,
+      appState.feeMultiplier ?? 1,
+      60 * 60
     );
 
-    setLine(`✅ 委任リクエスト送信完了 (${delegationHash.slice(0, 12)}...)。ノード側の反映をお待ちください。`);
+    const hash = await signAndAnnounceTx(tx);
+    setLine(`委任Tx送信済み (${hash.slice(0, 12)}...) 承認待ち...`);
+
+    const address = appState.currentAddress.toString();
+    await waitConfirmed(hash, address);
+    setLine("委任Tx承認完了。② ノードにリモート鍵をアンロック依頼します...");
+
+    const unlockRes = await fetch(new URL("/account/unlock", harvestNodeUrl), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ privateKey: lastRemoteKeys.remotePrivateKey }),
+    });
+
+    if (!unlockRes.ok) {
+      const errJson = await unlockRes.json().catch(() => ({}));
+      throw new Error(
+        `ノードへのアンロック依頼に失敗しました: ${errJson.message ?? unlockRes.status}`
+      );
+    }
+
+    setLine("✅ 委任ハーベスティングの設定が完了しました");
     alert(
-      "委任ハーベスティングの設定リクエストを送信しました。\n" +
-      "ノードが承諾すると数分〜数十分程度でハーベストが始まる場合があります。\n" +
-      "（ノード側の判断次第のため、必ず開始される保証はありません）"
+      "委任ハーベスティングの設定が完了しました。\n" +
+      "ノードが受け付けていれば、まもなくハーベストが始まります。\n" +
+      "（ノードを再起動するとアンロック状態が解除される場合があります）"
     );
+    await checkHarvestStatus();
   } catch (e) {
     console.error("startHarvest error:", e);
     setLine("❌ ハーベスト設定失敗: " + e.message);
@@ -395,9 +278,9 @@ export async function startHarvest() {
 
 /* ============================================================
    委任解除（Unlink）
-   ※ セッション内の一時キーには依存せず、REST APIで
-     「現在チェーン上にリンクされている公開鍵」を取得して
-     それをUNLINKする。これによりページ再読み込み後でも解除可能。
+   セッション内に直近生成したリモート鍵があればその公開鍵を使う。
+   無い場合(リロード後など)は解除対象を特定できないため、
+   手動でリモート公開鍵を入力してもらう。
 ============================================================ */
 export async function stopHarvest() {
   const statusEl = document.getElementById("harvest-status");
@@ -411,89 +294,46 @@ export async function stopHarvest() {
       throw new Error("SDK未初期化またはアカウント未接続です");
     }
 
-    setLine("現在の委任状況を確認中...");
-    const address = appState.currentAddress.toString();
-    const res = await fetch(`${appState.NODE}/accounts/${address}`);
-    const json = await res.json();
-    const keys = json.account?.supplementalPublicKeys;
+    let remotePublicKeyHex = lastRemoteKeys?.remotePublicKey;
 
-    const linkedHex = keys?.linked?.publicKey;
-    const vrfHex = keys?.vrf?.publicKey;
-    const nodeHex = keys?.node?.publicKey;
-
-    if (!linkedHex && !vrfHex && !nodeHex) {
-      setLine("解除対象がありません（未設定）");
-      alert("現在、委任ハーベスティングの鍵リンクは設定されていません。");
-      return;
+    if (!remotePublicKeyHex) {
+      remotePublicKeyHex = prompt(
+        "このセッションで委任した記録が見つかりませんでした。\n" +
+        "解除するリモートアカウントの公開鍵を入力してください\n" +
+        "（委任開始時にコンソールへ出力・表示された remotePublicKey です）："
+      );
+      if (!remotePublicKeyHex) {
+        setLine("解除をキャンセルしました");
+        return;
+      }
     }
 
-    const summary = [
-      linkedHex ? `remote: ${linkedHex}` : null,
-      vrfHex ? `vrf: ${vrfHex}` : null,
-      nodeHex ? `node: ${nodeHex}` : null,
-    ].filter(Boolean).join("\n");
-
-    if (!confirm(`以下のリンクを解除します。よろしいですか？\n\n${summary}`)) {
+    if (!confirm(`リモート公開鍵 ${remotePublicKeyHex} の委任を解除します。よろしいですか？`)) {
       setLine("解除をキャンセルしました");
       return;
     }
 
-    const { descriptors, models } = appState.sdkSymbol;
-    const embedded = [];
+    const { descriptors, models } = appState.sdkNem;
 
-    if (linkedHex) {
-      embedded.push(
-        appState.facade.createEmbeddedTransactionFromTypedDescriptor(
-          new descriptors.AccountKeyLinkTransactionV1Descriptor(
-            new appState.sdkCore.PublicKey(linkedHex),
-            models.LinkAction.UNLINK
-          ),
-          appState.currentPubKey
-        )
-      );
-    }
-    if (vrfHex) {
-      embedded.push(
-        appState.facade.createEmbeddedTransactionFromTypedDescriptor(
-          new descriptors.VrfKeyLinkTransactionV1Descriptor(
-            new appState.sdkCore.PublicKey(vrfHex),
-            models.LinkAction.UNLINK
-          ),
-          appState.currentPubKey
-        )
-      );
-    }
-    if (nodeHex) {
-      embedded.push(
-        appState.facade.createEmbeddedTransactionFromTypedDescriptor(
-          new descriptors.NodeKeyLinkTransactionV1Descriptor(
-            new appState.sdkCore.PublicKey(nodeHex),
-            models.LinkAction.UNLINK
-          ),
-          appState.currentPubKey
-        )
-      );
-    }
-
-    const aggregateDescriptor = new descriptors.AggregateCompleteTransactionV2Descriptor(
-      appState.facade.static.hashEmbeddedTransactions(embedded),
-      embedded
+    setLine("解除トランザクションを署名しています...");
+    const descriptor = new descriptors.ImportanceTransferTransactionV1Descriptor(
+      models.ImportanceTransferMode.DEACTIVATE,
+      new appState.sdkCore.PublicKey(remotePublicKeyHex)
     );
-
-    const aggregateTx = appState.facade.createTransactionFromTypedDescriptor(
-      aggregateDescriptor,
+    const tx = appState.facade.createTransactionFromTypedDescriptor(
+      descriptor,
       appState.currentPubKey,
-      100,
+      appState.feeMultiplier ?? 1,
       60 * 60
     );
 
-    setLine("解除トランザクションをSSSで署名してください...");
-    const hash = await signAndAnnounce(aggregateTx);
+    const hash = await signAndAnnounceTx(tx);
     setLine(`解除Tx送信済み (${hash.slice(0, 12)}...) 承認待ち...`);
 
-    await waitConfirmed(hash);
+    const address = appState.currentAddress.toString();
+    await waitConfirmed(hash, address);
 
-    lastGeneratedKeys = null;
+    lastRemoteKeys = null;
     setLine("✅ 委任ハーベスティングを解除しました");
     await checkHarvestStatus();
     alert("委任ハーベスティングの解除が完了しました。");
