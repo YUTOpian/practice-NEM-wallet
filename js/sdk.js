@@ -1,43 +1,50 @@
 // sdk.js
-// Symbol SDK v3 の読み込みと Facade 初期化
+// symbol-sdk v3 の読み込みと NemFacade 初期化
+//
+// symbol-sdk はSymbol専用ではなく、NEM(NIS1)用の NemFacade も
+// 同梱している共通SDK。ブラウザ向けバンドルは
+// `{ core, nem, symbol }` の3名前空間をexportする。
+//
+// NIS1のREST APIには Symbol の /network/properties に相当する
+// エンドポイントが無いため、ネットワーク種別(Mainnet/Testnet)は
+// ログイン画面でユーザーが選択した値(appState.networkType)を
+// そのままFacadeの初期化に使う。
 
-import { appState } from "./config.js";
+import { appState, NetworkType } from "./config.js";
 
 const SDK_VERSION = "3.3.0";
 
 /**
  * SDK 初期化
+ * NEMは /network/properties のようなネットワーク自己申告APIが無いため、
+ * NODEが未設定でも(ノード選択前でも)初期化して問題ない。
  */
 export async function initSdk() {
-
-  if (!appState.NODE) {
-    throw new Error("NODE が未設定です");
-  }
-
   // ================================
-  //   Symbol SDK 読み込み
+  //   Symbol SDK 読み込み (nem名前空間を使用)
   // ================================
   const sdk = await import(
     `https://unpkg.com/symbol-sdk@${SDK_VERSION}/dist/bundle.web.js`
   );
 
   appState.sdkCore = sdk.core;
-  appState.sdkSymbol = sdk.symbol;
+  appState.sdkNem = sdk.nem;
 
-  // ================================
-  //   ネットワークプロパティ取得
-  // ================================
-  const props = await fetch(new URL("/network/properties", appState.NODE)).then(
-    (r) => r.json()
-  );
+  if (!appState.sdkNem) {
+    throw new Error(
+      "このバージョンの symbol-sdk には NEM(nem名前空間)が含まれていません。SDKのバージョンを確認してください。"
+    );
+  }
 
-  //
-  const epochRaw = props.network.epochAdjustment;
-  appState.epochAdjustment = Number(epochRaw.replace("s", ""));
+  if (!appState.networkType) {
+    throw new Error("ネットワーク種別(Mainnet/Testnet)が未設定です");
+  }
 
-  // ネットワーク識別子を取得し Facade 初期化
-  const identifier = props.network.identifier;
-  appState.facade = new appState.sdkSymbol.SymbolFacade(identifier);
+  const identifier =
+    appState.networkType === NetworkType.TESTNET ? "testnet" : "mainnet";
+
+  // NemFacade の初期化(Symbol同様、ネットワーク識別子文字列を渡す)
+  appState.facade = new appState.sdkNem.NemFacade(identifier);
 
   appState.isSdkReady = true;
 }
@@ -47,5 +54,4 @@ export async function initSdk() {
  */
 export const facade = () => appState.facade;
 export const sdkCore = () => appState.sdkCore;
-export const sdkSymbol = () => appState.sdkSymbol;
-export const scopedMetadataKey = () => appState.scopedMetadataKey;
+export const sdkNem = () => appState.sdkNem;
