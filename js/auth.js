@@ -21,6 +21,20 @@ export function hasCurrentMnemonic() {
 }
 
 /* ============================================================
+   新規ニーモニック生成(「新規作成」機能用)
+   BIP39の24単語(256bit)ニーモニックを生成して返す。
+   まだどこにも保存しない(画面に表示して記録してもらうだけ)。
+============================================================ */
+export async function generateNewMnemonic() {
+  const [bip39, wordlistModule] = await Promise.all([
+    import("https://esm.sh/@scure/bip39@2.2.0"),
+    import("https://esm.sh/@scure/bip39@2.2.0/wordlists/english"),
+  ]);
+  const { wordlist } = wordlistModule;
+  return bip39.generateMnemonic(wordlist, 256); // 24単語
+}
+
+/* ============================================================
    ニーモニック → 秘密鍵 (BIP39 + SLIP-10)
    導出パスはNEMのSLIP44コインタイプ(43)を使用: m/44'/43'/{account}'/0'/0'
    ({account}を変えることで同じニーモニックから複数アカウントを導出できる)
@@ -98,6 +112,9 @@ export async function switchToAccount(id) {
   if (!appState.isSdkReady) {
     const isTestnet = appState.networkType === NetworkType.TESTNET;
     appState.NODE = await selectNode(isTestnet);
+    if (!appState.NODE) {
+      throw new Error("ノードに接続できません");
+    }
     await initSdk();
   }
 
@@ -432,6 +449,71 @@ export async function signAndAnnounceTx(tx) {
   }
 
   return appState.facade.hashTransaction(tx).toString();
+}
+
+/* ============================================================
+   ログイン画面に戻る(保存データは削除しない)
+   ログアウトと違い、保存済みのアカウント情報(パスワードで暗号化されたもの、
+   または平文保存されたもの)はそのまま残す。単に今のセッションを終了して
+   ログイン画面(パスワード入力 または ようこそ画面)に戻すだけの処理。
+   実際にどちらの画面を表示するかは、呼び出し側で getVaultMode() を見て判断する。
+============================================================ */
+export function returnToLoginScreen() {
+  closeWebSocket();
+  currentMnemonicPhrase = null;
+
+  appState.authMode = null;
+  appState.currentPubKey = null;
+  appState.currentAddress = null;
+  appState.localPrivateKeyHex = null;
+  appState.localKeyPair = null;
+  appState.NODE = null;
+  appState.isSdkReady = false;
+  appState.accounts = [];
+  appState.activeAccountId = null;
+  // appState.networkType はあえてクリアしない
+  // (次のログイン時にネットワーク選択の手間を減らすため)
+}
+
+/* ============================================================
+   ネットワーク切り替え(メインネット⇔テストネット)
+   接続可能なHTTPS対応ノードが無い場合は何もせず false を返す
+   (呼び出し側でアラート表示する想定)。
+   同じ秘密鍵でも、ネットワークが変わるとアドレスの見た目が変わるため、
+   全アカウントのアドレス表示を再計算してから保存し直す。
+============================================================ */
+export async function switchNetwork(targetNetworkType) {
+  const isTestnet = targetNetworkType === NetworkType.TESTNET;
+  const node = await selectNode(isTestnet);
+  if (!node) {
+    return false;
+  }
+
+  closeWebSocket();
+
+  appState.networkType = targetNetworkType;
+  appState.NODE = node;
+  appState.isSdkReady = false;
+  await initSdk();
+
+  // 保存済み全アカウントのアドレス表示を、新しいネットワークで再計算する
+  for (const acc of appState.accounts) {
+    if (!acc.privateKeyHex) continue;
+    try {
+      const keyPair = new appState.facade.static.KeyPair(
+        new appState.sdkCore.PrivateKey(acc.privateKeyHex)
+      );
+      acc.address = appState.facade.network.publicKeyToAddress(keyPair.publicKey).toString();
+    } catch (e) {
+      console.warn("アドレス再計算失敗:", acc.id, e);
+    }
+  }
+
+  if (appState.activeAccountId) {
+    await switchToAccount(appState.activeAccountId);
+  }
+
+  return true;
 }
 
 /* ============================================================
