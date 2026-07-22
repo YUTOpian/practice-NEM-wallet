@@ -338,9 +338,11 @@ const sdkNem = () => appState.sdkNem;
 // 慣習的に立てています。config.js の MAINNET_SEED_NODES には、
 // https://nemnodes.org/nodes 上でHTTPS対応が確認できたノードのみを
 // 登録しています。
-
-const HTTPS_ONLY_NOTE =
-  "このアプリはHTTPS対応ノードにのみ接続します。http://のノードは指定できません。";
+//
+// 接続できるHTTPS対応ノードが1つも見つからない場合、この関数は
+// (画面に詳細な警告文を出すのではなく) null を返すだけにしてあります。
+// 呼び出し側(index.js)で `if (!node) alert("ノードに接続できません")`
+// のように、シンプルなアラートで知らせる設計にしています。
 
 function isHttpsUrl(nodeUrl) {
   try {
@@ -374,6 +376,10 @@ async function isNodeAlive(nodeUrl, timeoutMs = 2500) {
   }
 }
 
+/**
+ * HTTPS対応ノードを1つ選んで返す。
+ * 接続できるノードが無ければ null を返す(画面への警告表示はしない)。
+ */
 async function selectNode(isTestnet) {
   const infoEl = document.getElementById("node-info");
   const allSeeds = isTestnet ? TESTNET_SEED_NODES : MAINNET_SEED_NODES;
@@ -383,15 +389,7 @@ async function selectNode(isTestnet) {
 
   if (seeds.length === 0) {
     if (infoEl) {
-      infoEl.innerHTML = renderNodeInfoHtml({
-        isTestnet,
-        nodeOrigin: "(未接続)",
-        note: `<div style="color:#f97316;font-size:13px;">
-                 ⚠️ ${isTestnet ? "テストネット" : "メインネット"}のHTTPS対応シードノードが
-                 登録されていません。「設定 → 接続先ノードの変更」からHTTPS対応ノードの
-                 URLを手動で入力してください(${HTTPS_ONLY_NOTE})
-               </div>`,
-      });
+      infoEl.innerHTML = renderNodeInfoHtml({ isTestnet, nodeOrigin: "(未接続)" });
     }
     return null;
   }
@@ -409,17 +407,11 @@ async function selectNode(isTestnet) {
     }
   }
 
-  // 全滅した場合でも、http:// は絶対に返さない
-  // (設定画面から手動で生きているHTTPSノードに切り替えてもらう前提)
-  const fallback = candidates[0];
+  // 全滅した場合は null を返す(http://へのフォールバックは絶対にしない)
   if (infoEl) {
-    infoEl.innerHTML = renderNodeInfoHtml({
-      isTestnet,
-      nodeOrigin: fallback,
-      note: `<span style="color:#f97316;">登録済みのHTTPS対応ノードに接続できませんでした。設定からノードを手動指定してください。</span>`,
-    });
+    infoEl.innerHTML = renderNodeInfoHtml({ isTestnet, nodeOrigin: "(未接続)" });
   }
-  return fallback;
+  return null;
 }
 
 /**
@@ -1034,6 +1026,20 @@ function hasCurrentMnemonic() {
 }
 
 /* ============================================================
+   新規ニーモニック生成(「新規作成」機能用)
+   BIP39の24単語(256bit)ニーモニックを生成して返す。
+   まだどこにも保存しない(画面に表示して記録してもらうだけ)。
+============================================================ */
+async function generateNewMnemonic() {
+  const [bip39, wordlistModule] = await Promise.all([
+    import("https://esm.sh/@scure/bip39@2.2.0"),
+    import("https://esm.sh/@scure/bip39@2.2.0/wordlists/english"),
+  ]);
+  const { wordlist } = wordlistModule;
+  return bip39.generateMnemonic(wordlist, 256); // 24単語
+}
+
+/* ============================================================
    ニーモニック → 秘密鍵 (BIP39 + SLIP-10)
    導出パスはNEMのSLIP44コインタイプ(43)を使用: m/44'/43'/{account}'/0'/0'
    ({account}を変えることで同じニーモニックから複数アカウントを導出できる)
@@ -1112,9 +1118,7 @@ async function switchToAccount(id) {
     const isTestnet = appState.networkType === NetworkType.TESTNET;
     appState.NODE = await selectNode(isTestnet);
     if (!appState.NODE) {
-      throw new Error(
-        "接続可能なHTTPS対応ノードが見つかりませんでした。「設定 → 接続先ノードの変更」からHTTPS対応ノードのURLを手動で入力してください。"
-      );
+      throw new Error("ノードに接続できません");
     }
     await initSdk();
   }
@@ -1450,6 +1454,71 @@ async function signAndAnnounceTx(tx) {
   }
 
   return appState.facade.hashTransaction(tx).toString();
+}
+
+/* ============================================================
+   ログイン画面に戻る(保存データは削除しない)
+   ログアウトと違い、保存済みのアカウント情報(パスワードで暗号化されたもの、
+   または平文保存されたもの)はそのまま残す。単に今のセッションを終了して
+   ログイン画面(パスワード入力 または ようこそ画面)に戻すだけの処理。
+   実際にどちらの画面を表示するかは、呼び出し側で getVaultMode() を見て判断する。
+============================================================ */
+function returnToLoginScreen() {
+  closeWebSocket();
+  currentMnemonicPhrase = null;
+
+  appState.authMode = null;
+  appState.currentPubKey = null;
+  appState.currentAddress = null;
+  appState.localPrivateKeyHex = null;
+  appState.localKeyPair = null;
+  appState.NODE = null;
+  appState.isSdkReady = false;
+  appState.accounts = [];
+  appState.activeAccountId = null;
+  // appState.networkType はあえてクリアしない
+  // (次のログイン時にネットワーク選択の手間を減らすため)
+}
+
+/* ============================================================
+   ネットワーク切り替え(メインネット⇔テストネット)
+   接続可能なHTTPS対応ノードが無い場合は何もせず false を返す
+   (呼び出し側でアラート表示する想定)。
+   同じ秘密鍵でも、ネットワークが変わるとアドレスの見た目が変わるため、
+   全アカウントのアドレス表示を再計算してから保存し直す。
+============================================================ */
+async function switchNetwork(targetNetworkType) {
+  const isTestnet = targetNetworkType === NetworkType.TESTNET;
+  const node = await selectNode(isTestnet);
+  if (!node) {
+    return false;
+  }
+
+  closeWebSocket();
+
+  appState.networkType = targetNetworkType;
+  appState.NODE = node;
+  appState.isSdkReady = false;
+  await initSdk();
+
+  // 保存済み全アカウントのアドレス表示を、新しいネットワークで再計算する
+  for (const acc of appState.accounts) {
+    if (!acc.privateKeyHex) continue;
+    try {
+      const keyPair = new appState.facade.static.KeyPair(
+        new appState.sdkCore.PrivateKey(acc.privateKeyHex)
+      );
+      acc.address = appState.facade.network.publicKeyToAddress(keyPair.publicKey).toString();
+    } catch (e) {
+      console.warn("アドレス再計算失敗:", acc.id, e);
+    }
+  }
+
+  if (appState.activeAccountId) {
+    await switchToAccount(appState.activeAccountId);
+  }
+
+  return true;
 }
 
 /* ============================================================
@@ -2724,8 +2793,6 @@ function nextMnemonicAccountIndex() {
 }
 
 // ======================== QRCode (遅延読み込み) ========================
-// index.htmlをfile://やhttp://で直接開いても動くよう、
-// 静的importではなく実際に使う瞬間に動的importする
 let _qrCodeModulePromise = null;
 function loadQRCode() {
   if (!_qrCodeModulePromise) {
@@ -2743,6 +2810,7 @@ window.addEventListener("load", async () => {
   // ============================
   const welcomePage = document.getElementById("welcome-page");
   const mnemonicImportPage = document.getElementById("mnemonic-import-page");
+  const createNewPage = document.getElementById("create-new-page");
   const passwordSetupPage = document.getElementById("password-setup-page");
   const unlockPage = document.getElementById("unlock-page");
   const accountPage = document.getElementById("account-page");
@@ -2751,6 +2819,7 @@ window.addEventListener("load", async () => {
   const receivePage = document.getElementById("receive-page");
   const harvestPage = document.getElementById("harvest-page");
   const settingsPage = document.getElementById("settings-page");
+  const networkSettingsPage = document.getElementById("network-settings-page");
   const nodeSettingsPage = document.getElementById("node-settings-page");
   const feeSettingsPage = document.getElementById("fee-settings-page");
   const accountSwitcherPage = document.getElementById("account-switcher-page");
@@ -2799,8 +2868,8 @@ window.addEventListener("load", async () => {
   }
 
   // ============================
-  // ニーモニックインポート画面へ
-  // (ウェルカム画面にはニーモニック選択肢のみ。SSS Extensionは非対応)
+  // ニーモニックインポート画面へ / 新規作成画面へ
+  // (ウェルカム画面はニーモニック関連の選択肢のみ。SSS Extensionは非対応)
   // ============================
   document.getElementById("choose-mnemonic")?.addEventListener("click", () => {
     showPage(mnemonicImportPage);
@@ -2827,6 +2896,59 @@ window.addEventListener("load", async () => {
     } catch (e) {
       console.error("loginWithMnemonic error:", e);
       setStatus("mnemonic-import-status", e.message || "インポートに失敗しました。", "error");
+      alert(e.message || "ノードに接続できません");
+    }
+  });
+
+  // ============================
+  // 新規作成画面
+  // ============================
+  let generatedMnemonicPhrase = null;
+
+  document.getElementById("choose-create-new")?.addEventListener("click", () => {
+    generatedMnemonicPhrase = null;
+    document.getElementById("generated-mnemonic-area").style.display = "none";
+    document.getElementById("generated-mnemonic-display").textContent = "";
+    setStatus("create-new-status", "", "default");
+    showPage(createNewPage);
+  });
+
+  document.getElementById("back-welcome-create-new")?.addEventListener("click", () => showPage(welcomePage));
+
+  document.getElementById("generate-mnemonic-btn")?.addEventListener("click", async () => {
+    setStatus("create-new-status", "生成中...");
+    try {
+      generatedMnemonicPhrase = await generateNewMnemonic();
+      document.getElementById("generated-mnemonic-display").textContent = generatedMnemonicPhrase;
+      document.getElementById("generated-mnemonic-area").style.display = "block";
+      setStatus("create-new-status", "", "default");
+    } catch (e) {
+      console.error("generateNewMnemonic error:", e);
+      setStatus("create-new-status", e.message || "生成に失敗しました。", "error");
+    }
+  });
+
+  document.getElementById("create-new-next-btn")?.addEventListener("click", async () => {
+    if (!generatedMnemonicPhrase) return;
+
+    const recorded = confirm("記録しましたか？");
+    if (!recorded) return;
+
+    const networkChoice = document.getElementById("create-new-network-select").value;
+    const networkType = networkChoice === "testnet" ? NetworkType.TESTNET : NetworkType.MAINNET;
+
+    setStatus("create-new-status", "作成中...");
+    try {
+      await loginWithMnemonic(generatedMnemonicPhrase, networkType);
+      generatedMnemonicPhrase = null;
+      document.getElementById("generated-mnemonic-display").textContent = "";
+      document.getElementById("generated-mnemonic-area").style.display = "none";
+      setStatus("create-new-status", "", "default");
+      goHome();
+    } catch (e) {
+      console.error("loginWithMnemonic (create-new) error:", e);
+      setStatus("create-new-status", e.message || "作成に失敗しました。", "error");
+      alert(e.message || "ノードに接続できません");
     }
   });
 
@@ -3233,6 +3355,59 @@ window.addEventListener("load", async () => {
   });
 
   document.getElementById("apply-fee-btn")?.addEventListener("click", applyFeeSettings);
+
+  // ============================
+  // ネットワーク切り替え
+  // ============================
+  document.getElementById("menu-network-settings")?.addEventListener("click", () => {
+    const current = document.getElementById("network-settings-current");
+    if (current) {
+      current.textContent = appState.networkType === NetworkType.TESTNET ? "Testnet" : "Mainnet";
+    }
+    setStatus("network-settings-status", "", "default");
+    showPage(networkSettingsPage);
+  });
+
+  document.getElementById("back-settings-network")?.addEventListener("click", () => showPage(settingsPage));
+
+  async function handleSwitchNetwork(targetNetworkType) {
+    setStatus("network-settings-status", "切り替え中...");
+    try {
+      const ok = await switchNetwork(targetNetworkType);
+      if (!ok) {
+        alert("ネットワーク切り替えができません");
+        setStatus("network-settings-status", "", "default");
+        return;
+      }
+      const current = document.getElementById("network-settings-current");
+      if (current) {
+        current.textContent = targetNetworkType === NetworkType.TESTNET ? "Testnet" : "Mainnet";
+      }
+      setStatus("network-settings-status", "✅ 切り替えました。", "success");
+      goHome();
+    } catch (e) {
+      console.error("switchNetwork error:", e);
+      alert("ネットワーク切り替えができません");
+      setStatus("network-settings-status", "", "default");
+    }
+  }
+
+  document.getElementById("switch-to-mainnet-btn")?.addEventListener("click", () => handleSwitchNetwork(NetworkType.MAINNET));
+  document.getElementById("switch-to-testnet-btn")?.addEventListener("click", () => handleSwitchNetwork(NetworkType.TESTNET));
+
+  // ============================
+  // ログイン画面に戻る(データは削除しない)
+  // ============================
+  document.getElementById("back-to-login-btn")?.addEventListener("click", () => {
+    if (!confirm("ログイン画面に戻ります。保存されたアカウント情報は削除されません。よろしいですか？")) return;
+    returnToLoginScreen();
+    const mode = getVaultMode();
+    if (mode === "encrypted") {
+      showPage(unlockPage);
+    } else {
+      showPage(welcomePage);
+    }
+  });
 
   document.getElementById("logout-btn")?.addEventListener("click", () => {
     if (!confirm("ログアウトします。次回は再度ニーモニックの入力が必要になります。よろしいですか？")) return;
