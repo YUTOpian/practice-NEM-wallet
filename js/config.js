@@ -5,29 +5,45 @@
 // このアプリでは appState.sdkNem 経由でNEMのトランザクションを構築する。
 
 // ============================================================
-// NIS1 シードノード
-// NEM(NIS1)は稼働ノード数がSymbolほど多くなく、常時生きているノードを
-// 決め打ちするのは現実的ではないため、
-// 「シードノードに接続し /node/peer-list/reachable で
-//   実際に生きているピアを取得する」方式を採用する(nodeSelector.js参照)。
-// 以下はその際に最初に叩くシードノード。
-// ※ 長期間運用されていないノードが含まれている可能性があります。
-//   実際の利用前に必ず動作確認し、必要に応じて書き換えてください。
+// NIS1 シードノード (HTTPS対応ノードのみ)
 //
-// ⚠️ 重要: NIS1ノードは基本的に http:// のみ対応で、HTTPSには対応していません。
-// このアプリをHTTPS(GitHub Pagesなど)で配信している場合、ブラウザの
-// Mixed Content制限により、ここに書いたシードノードへは一切接続できません。
-// 対処法は同梱の NOTES.md および proxy-worker.js を参照してください。
+// NIS1ノードは基本 http://(7890) のみですが、一部の運用者は
+// stunnel等で http→https のリバースプロキシを慣習的に 7891番ポートで
+// 立てています。このアプリは常にHTTPSページから使うことを前提に、
+// **HTTPS対応が確認できるノードのみ** を接続先候補にしています
+// (HTTPのみのノードには一切接続しません。Mixed Content制限の回避と、
+//  通信経路の暗号化の両方の理由からです)。
+//
+// 以下は https://nemnodes.org/nodes (NIS1ノード一覧) 上で "https" リンクが
+// 掲載されていた(HTTPS対応が確認できた)メインネットノードの一部です。
+// ノードの生死は流動的なので、実際に使う前に動作確認し、
+// 定期的にメンテナンスしてください: https://nemnodes.org/nodes
 // ============================================================
 export const MAINNET_SEED_NODES = [
-  "http://alice6.nem.ninja:7890",
-  "http://62.75.251.134:7890",
-  "http://198.204.240.68:7890",
+  "https://arasio.tsvr.net:7891",
+  "https://mosio.tsvr.net:7891",
+  "https://norisio.tsvr.net:7891",
+  "https://siomusubi.tsvr.net:7891",
+  "https://tenpisio.tsvr.net:7891",
+  "https://yukisio.tsvr.net:7891",
+  "https://super-nem.love:7891",
+  "https://luna2.dusanjp.com:7891",
+  "https://nis1.dusanjp.com:7891",
+  "https://nem01.symbol-node.com:7891",
+  "https://nem06.symbol-node.com:7891",
+  "https://nem08.symbol-node.com:7891",
+  "https://sakia.nis1.harvestasya.com:7891",
+  "https://siobeef.tsvr.net:7891",
+  "https://eisa.kasanetalk.net:7891",
 ];
 
+// ⚠️ テストネットは執筆時点で https://nemnodes.org/nodes_testnet 上に
+// HTTPS対応ノードの一覧を確認できませんでした。テストネットで検証したい場合は、
+// ① 上記サイトで最新のテストネットノードを確認しhttps対応か調べる、
+// ② 自分でテストネットノードを stunnel 等でHTTPS化する、
+// ③ 同梱の proxy-worker.js でHTTPS化する、のいずれかが必要です。
+// (「設定 → 接続先ノードの変更」で見つけたノードのURLを直接指定できます)
 export const TESTNET_SEED_NODES = [
-  "http://50.3.87.123:7890",
-  "http://23.228.67.85:7890",
 ];
 
 // ============================================================
