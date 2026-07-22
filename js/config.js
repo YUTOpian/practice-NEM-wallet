@@ -90,15 +90,8 @@ export const appState = {
   // 現在利用中Node
   NODE: null,
 
-  // 手数料倍率(1が標準。NEMは辺の数などから決まる基準手数料に掛け合わせる)
-  feeMultiplier: (() => {
-    try {
-      const saved = Number(localStorage.getItem("feeMultiplier"));
-      return Number.isFinite(saved) && saved > 0 ? saved : 1;
-    } catch {
-      return 1;
-    }
-  })(),
+  // 手数料倍率(常に1固定。設定画面から変更する機能は廃止した)
+  feeMultiplier: 1,
 
   // ========================================================
   // 認証方式: このアプリは常に "local"(ニーモニック/秘密鍵ログイン)
