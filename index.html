@@ -4,8 +4,63 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>NEM Simple Wallet</title>
-  <link rel="stylesheet" href="css/base.css" />
-  <link rel="stylesheet" href="css/wallet.css" />
+  <link rel="stylesheet" href="css/base.css?v=2" />
+  <link rel="stylesheet" href="css/wallet.css?v=2" />
+  <style>
+    /* ============================================================
+       重要レイアウト用インラインCSS(フォールバック)
+       外部CSSの読み込み状況に関係なく、この見た目を保証するために
+       ここに直接書いています。wallet.css側にも同じ定義がありますが、
+       万一そちらが読み込めない/古いキャッシュが残っている場合でも
+       ここが優先して効くようにしてあります。
+    ============================================================ */
+    .card-title-row {
+      display: flex !important;
+      align-items: center !important;
+      justify-content: space-between !important;
+      gap: 12px !important;
+    }
+    .card-title-row h2 {
+      margin: 0 !important;
+    }
+    .title-with-switcher {
+      display: flex !important;
+      align-items: center !important;
+      gap: 8px !important;
+    }
+    .chevron-btn {
+      background: transparent !important;
+      border: none !important;
+      color: #cbd5e1 !important;
+      font-size: 13px !important;
+      cursor: pointer !important;
+      padding: 4px 6px !important;
+      border-radius: 6px !important;
+      display: inline-flex !important;
+      align-items: center !important;
+      width: auto !important;
+      margin-top: 0 !important;
+    }
+    .chevron-btn:hover {
+      background: #334155 !important;
+    }
+    .settings-gear-btn {
+      background: transparent !important;
+      border: none !important;
+      font-size: 22px !important;
+      cursor: pointer !important;
+      padding: 4px 8px !important;
+      border-radius: 8px !important;
+      line-height: 1 !important;
+      width: auto !important;
+      margin-top: 0 !important;
+      display: inline-flex !important;
+      align-items: center !important;
+    }
+    .settings-gear-btn:hover {
+      background: #334155 !important;
+    }
+  </style>
 </head>
 <body>
 
@@ -657,7 +712,7 @@
 
 </div>
 
-<script src="js/bundle.js"></script>
+<script src="js/bundle.js?v=2"></script>
 
 </body>
 </html>
