@@ -1,67 +1,103 @@
 // ws.js
+// NIS1にはSymbolのような単純なWebSocket購読(トピック文字列をsubscribeするだけ)は無く、
+// SockJS+STOMPベースの別プロトコルになる。実装コストと安定性を考慮し、
+// このアプリでは「数秒おきにREST APIを再取得するポーリング」で
+// 同等のリアルタイム性(見た目上)を実現する。
+//
+// 呼び出し側(auth.js, settings.js, transactions.js等)からの見え方を変えないよう、
+// 関数名は元のWebSocket版と同じ(initWebSocket / closeWebSocket / addCallback /
+// getBlockTimestamp)にしてある。
+
 import { appState } from "./config.js";
 import { playSoundOnce } from "./utils.js";
 
-let ws = null;
-let uid = "";
-let callbacks = {};              // ← 再接続ごとにリセットされるように維持
-let soundHooksRegistered = false; // ← 音のcallbackを二重登録しないため
+const POLL_INTERVAL_MS = 8000;
+
+let pollTimer = null;
+let callbacks = {};
+let knownUnconfirmedHashes = new Set();
+let knownConfirmedHashes = new Set();
+let soundHooksRegistered = false;
 
 /* ============================================================
-   WebSocket 開始
+   ポーリング開始
 ============================================================ */
 export function initWebSocket(address) {
-  const wsUrl = appState.NODE.replace("http", "ws") + "/ws";
+  closeWebSocket();
 
-  ws = new WebSocket(wsUrl);
+  knownUnconfirmedHashes = new Set();
+  knownConfirmedHashes = new Set();
+  registerSoundCallbacks(address);
 
-  ws.onopen = () => {
-    console.log("WS Connected:", wsUrl);
+  const tick = async () => {
+    if (!appState.NODE || !appState.currentAddress) return;
 
-    soundHooksRegistered = false;
+    try {
+      // 未承認トランザクション
+      const unconfirmedRes = await fetch(
+        `${appState.NODE}/account/unconfirmedTransactions?address=${address}`
+      );
+      const unconfirmedJson = await unconfirmedRes.json();
+      const unconfirmedItems = unconfirmedJson?.data ?? [];
+
+      for (const item of unconfirmedItems) {
+        const hash = item.meta?.hash?.data ?? item.meta?.hash;
+        if (!hash || knownUnconfirmedHashes.has(hash)) continue;
+        knownUnconfirmedHashes.add(hash);
+
+        const topic = `unconfirmedAdded/${address}`;
+        (callbacks[topic] || []).forEach((cb) => cb({ data: item }));
+      }
+
+      // 承認済みトランザクション(直近分)
+      const confirmedRes = await fetch(
+        `${appState.NODE}/account/transfers/all?address=${address}&pageSize=10`
+      );
+      const confirmedJson = await confirmedRes.json();
+      const confirmedItems = confirmedJson?.data ?? [];
+
+      for (const item of confirmedItems) {
+        const hash = item.meta?.hash?.data ?? item.meta?.hash;
+        if (!hash || knownConfirmedHashes.has(hash)) continue;
+        knownConfirmedHashes.add(hash);
+        knownUnconfirmedHashes.delete(hash);
+
+        const topic = `confirmedAdded/${address}`;
+        (callbacks[topic] || []).forEach((cb) => cb({ data: item }));
+      }
+    } catch (e) {
+      console.warn("polling error:", e);
+    }
   };
 
-  ws.onmessage = e => {
-    const data = JSON.parse(e.data);
-
-    // ① 初回受信（uid 受け取り）
-    if (data.uid !== undefined) {
-      uid = data.uid;
-
-      // 監視開始
-      subscribe("block");
-      subscribe(`unconfirmedAdded/${address}`);
-      subscribe(`confirmedAdded/${address}`);
-
-      // 🔥 音の callback は **1回だけ登録する**
-      registerSoundCallbacks(address);
-
-      return;
+  // 初回は「今ある分」を既知として扱うため、
+  // コールバック発火なしで1回だけ状態を埋める
+  (async () => {
+    try {
+      const confirmedRes = await fetch(
+        `${appState.NODE}/account/transfers/all?address=${address}&pageSize=10`
+      );
+      const confirmedJson = await confirmedRes.json();
+      for (const item of confirmedJson?.data ?? []) {
+        const hash = item.meta?.hash?.data ?? item.meta?.hash;
+        if (hash) knownConfirmedHashes.add(hash);
+      }
+    } catch (e) {
+      console.warn("initial polling seed error:", e);
     }
 
-    // ② 通常のメッセージ
-    const topic = data.topic;
-    if (callbacks[topic]) {
-      // 登録された callback を実行
-      callbacks[topic].forEach(cb => cb(data));
-    }
-  };
-
-  ws.onerror = err => console.error("WS error:", err);
-
-  ws.onclose = () => {
-    console.log("WS Closed. Reconnecting...");
-    // 🔥 Socket が閉じたら 1.2秒後に自動再接続
-    setTimeout(() => initWebSocket(address), 1200);
-  };
+    pollTimer = setInterval(tick, POLL_INTERVAL_MS);
+  })();
 }
 
 /* ============================================================
-   subscribe
+   ポーリング停止（ノード切替時などに使用）
 ============================================================ */
-export function subscribe(topic) {
-  if (!ws || ws.readyState !== WebSocket.OPEN) return;
-  ws.send(JSON.stringify({ uid, subscribe: topic }));
+export function closeWebSocket() {
+  if (pollTimer) {
+    clearInterval(pollTimer);
+    pollTimer = null;
+  }
 }
 
 /* ============================================================
@@ -73,13 +109,18 @@ export function addCallback(topic, cb) {
 }
 
 /* ============================================================
-   block height → timestamp
+   block height → timestamp (NEMネットワーク時刻。秒単位)
+   NIS1: GET /block/at/public { height } (POST)
 ============================================================ */
 export async function getBlockTimestamp(height) {
   try {
-    const url = `${appState.NODE}/blocks/${height}`;
-    const json = await fetch(url).then(r => r.json());
-    return json.block.timestamp;
+    const res = await fetch(new URL("/block/at/public", appState.NODE), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ height: Number(height) }),
+    });
+    const json = await res.json();
+    return json?.timeStamp ?? null;
   } catch {
     return null;
   }
@@ -89,14 +130,12 @@ export async function getBlockTimestamp(height) {
    未承認 / 承認の音を１回だけ登録
 ============================================================ */
 function registerSoundCallbacks(address) {
-  if (soundHooksRegistered) return; // 🔥 2重登録防止
+  if (soundHooksRegistered) return;
 
-  // 未承認トランザクション検知
   addCallback(`unconfirmedAdded/${address}`, () => {
     playSoundOnce("./sounds/ding.ogg");
   });
 
-  // 承認トランザクション検知
   addCallback(`confirmedAdded/${address}`, () => {
     playSoundOnce("./sounds/ding2.ogg");
   });
