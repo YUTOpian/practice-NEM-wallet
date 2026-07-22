@@ -249,7 +249,7 @@
       <select id="harvest-node-select" class="input-box">
         <option value="">-- 候補を読み込み中... --</option>
       </select>
-      <input id="harvest-node-input" class="input-box" placeholder="または直接ノードURLを入力 (例: https://xxx.xxx.jp:3001)">
+      <input id="harvest-node-input" class="input-box" placeholder="または直接ノードURLを入力 (HTTPS対応ノードのみ, 例: https://xxx.xxx.jp:7891)">
 
       <hr>
 
@@ -299,13 +299,19 @@
       <p><b>現在のノード：</b></p>
       <div id="current-node-display" class="address-text">---</div>
 
+      <p style="font-size:13px;color:#94a3b8;">
+        ⚠️ このアプリはHTTPS対応ノードにのみ接続できます(http://のノードは指定できません)。
+        HTTPS対応ノードは <a href="https://nemnodes.org/nodes" target="_blank" rel="noopener" style="color:#8ab4f8;">nemnodes.org</a>
+        の一覧で「https」リンクが載っているものを参考にしてください。
+      </p>
+
       <hr>
 
       <h3>ノード候補</h3>
       <select id="node-settings-select" class="input-box">
         <option value="">-- 候補を読み込み中... --</option>
       </select>
-      <input id="node-settings-input" class="input-box" placeholder="または直接ノードURLを入力 (例: https://xxx.xxx.jp:3001)">
+      <input id="node-settings-input" class="input-box" placeholder="または直接ノードURLを入力 (例: https://xxx.xxx.jp:7891)">
 
       <button id="apply-node-btn" class="button-primary">このノードに接続する</button>
       <div id="node-settings-status"></div>
@@ -651,7 +657,7 @@
 
 </div>
 
-<script type="module" src="js/index.js"></script>
+<script src="js/bundle.js"></script>
 
 </body>
 </html>
