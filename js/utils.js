@@ -6,8 +6,7 @@ export function hexToBytes(hex) {
   return new Uint8Array(bytes);
 }
 
-
-// ★ 2秒で自動消えるポップアップ表示
+// ★ 2秒(+フェード)で自動消えるポップアップ表示
 
 export function showPopup(message, isError = false) {
   let popup = document.getElementById("copy-popup");
@@ -35,7 +34,7 @@ export function showPopup(message, isError = false) {
   popup.style.opacity = "1";
   popup.style.transition = "opacity .4s";
 
-  // ★ 2秒後フェードアウト
+  // ★ 一定時間後フェードアウト
   setTimeout(() => {
     popup.style.opacity = "0";
 
@@ -44,7 +43,6 @@ export function showPopup(message, isError = false) {
     }, 400);
   }, 3000);
 }
-
 
 let soundQueue = Promise.resolve();
 
@@ -55,42 +53,44 @@ export function playSoundOnce(file) {
         const audio = new Audio(file);
         audio.volume = 1.0;
 
-        // 再生開始。エラーでも resolve する
         audio.play().catch(() => {}).finally(() => {
-          setTimeout(resolve, 100); // 音再生は別スレッド扱いに
+          setTimeout(resolve, 100);
         });
       });
     });
 }
 
 // ============================================================
-// モザイク数量表示フォーマット
+// モザイク/XEM 数量表示フォーマット
 // ============================================================
 
 export function formatMosaicAmount(amount, divisibility = 0) {
+  const value = Number(amount) / (10 ** divisibility);
 
-  const value =
-    Number(amount) /
-    (10 ** divisibility);
-
-
-  return value.toLocaleString(
-    "ja-JP",
-    {
-      maximumFractionDigits: divisibility
-    }
-  );
-
+  return value.toLocaleString("ja-JP", {
+    maximumFractionDigits: divisibility,
+  });
 }
 
 export function hexToUint8Array(hex) {
   const bytes = [];
-
-  for(let i = 0; i < hex.length; i += 2){
-    bytes.push(
-      parseInt(hex.substring(i, i + 2), 16)
-    );
+  for (let i = 0; i < hex.length; i += 2) {
+    bytes.push(parseInt(hex.substring(i, i + 2), 16));
   }
-
   return new Uint8Array(bytes);
+}
+
+// ============================================================
+// #node-info 表示用 共通HTML生成
+// ネットワーク表記（Mainnet/Testnet）＋使用ノードをまとめて表示する
+// ============================================================
+
+export function renderNodeInfoHtml({ isTestnet, nodeOrigin, note = "" }) {
+  return (
+    `<div style="font-size: 20px; font-weight: bold; color: #8ab4f8;">` +
+    `${isTestnet ? "🟡 Testnet" : "🟢 Mainnet"}` +
+    `</div>` +
+    `使用ノード：<b>${nodeOrigin}</b><br>` +
+    (note ? `${note}<br>` : "")
+  );
 }
