@@ -1,50 +1,43 @@
 // nodeSelector.js
-// NIS1にはSymbolの NodeWatch のような第三者ノード監視サービスが無いため、
-// シードノードに順番に接続を試み、最初に応答した(生きている)ノードを採用する。
-// 生きているノードが見つかった場合は、そのノードの /node/peer-list/reachable
-// から他の生きているピアも取得できるようにしておく(設定画面のノード切替用)。
+// このアプリは常に HTTPS対応ノードにのみ接続する仕様です
+// (HTTPのみのノードは候補にすら入れません)。
 //
-// ⚠️ 重要な制約:
-// NIS1ノードは基本的に http:// (ポート7890)のみで提供されており、
-// HTTPS対応ノードは運用者が個別にリバースプロキシを立てない限り存在しません。
-// このアプリをHTTPSページ(GitHub Pagesなど)から開いている場合、
-// ブラウザの Mixed Content 制限により http:// のノードへは
-// 一切アクセスできません(これはコード側では回避不可能な、
-// ブラウザ自体のセキュリティ機能です)。
+// 理由:
+//   ① このアプリ自体がHTTPS(GitHub Pages等)で配信されることを前提にしており、
+//      HTTPのノードはブラウザのMixed Content制限で原理的に接続不可能
+//   ② 通信経路の暗号化(盗聴・改ざん防止)のため
 //
-// 対処法:
-//   ① このアプリ自体をHTTPで配信する(ローカルで index.html を直接開く、
-//      または `python3 -m http.server` 等で配信する)
-//   ② HTTPSに対応したNIS1ノード、または自分でHTTP→HTTPSの
-//      リバースプロキシを用意し、その https:// URL を
-//      「設定 → 接続先ノードの変更」で手動指定する
-//      (Cloudflare Workersなどで簡単に作れます。詳しくは
-//       同梱の NOTES.md を参照してください)
+// NIS1ノードは基本 http://(7890)のみですが、一部の運用者は
+// stunnel等で http→https のリバースプロキシを 7891番ポートで
+// 慣習的に立てています。config.js の MAINNET_SEED_NODES には、
+// https://nemnodes.org/nodes 上でHTTPS対応が確認できたノードのみを
+// 登録しています。
 
 import { MAINNET_SEED_NODES, TESTNET_SEED_NODES } from "./config.js";
 import { renderNodeInfoHtml } from "./utils.js";
 
-function isMixedContentBlocked(nodeUrl) {
-  return (
-    typeof location !== "undefined" &&
-    location.protocol === "https:" &&
-    nodeUrl.startsWith("http://")
-  );
+const HTTPS_ONLY_NOTE =
+  "このアプリはHTTPS対応ノードにのみ接続します。http://のノードは指定できません。";
+
+export function isHttpsUrl(nodeUrl) {
+  try {
+    return new URL(nodeUrl).protocol === "https:";
+  } catch {
+    return false;
+  }
 }
 
-function withTimeout(promise, ms) {
+function withTimeout(ms) {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), ms);
   return { signal: controller.signal, clear: () => clearTimeout(timeoutId) };
 }
 
-async function isNodeAlive(nodeUrl, timeoutMs = 2500) {
-  // https ページから http ノードへは原理的に到達不可能なので、
-  // 無駄なリクエスト(＝コンソールを埋める Mixed Content エラー)を出さずに
-  // 即座に「ダメ」と判定する
-  if (isMixedContentBlocked(nodeUrl)) return null;
+export async function isNodeAlive(nodeUrl, timeoutMs = 2500) {
+  // HTTPS以外は候補にすら入れない
+  if (!isHttpsUrl(nodeUrl)) return null;
 
-  const { signal, clear } = withTimeout(null, timeoutMs);
+  const { signal, clear } = withTimeout(timeoutMs);
   try {
     const res = await fetch(new URL("/chain/height", nodeUrl), { signal });
     clear();
@@ -60,12 +53,25 @@ async function isNodeAlive(nodeUrl, timeoutMs = 2500) {
 
 export async function selectNode(isTestnet) {
   const infoEl = document.getElementById("node-info");
-  const seeds = isTestnet ? TESTNET_SEED_NODES : MAINNET_SEED_NODES;
+  const allSeeds = isTestnet ? TESTNET_SEED_NODES : MAINNET_SEED_NODES;
+  const seeds = allSeeds.filter(isHttpsUrl);
 
   if (infoEl) infoEl.textContent = "ノードに接続中…";
 
-  const pageIsHttps = typeof location !== "undefined" && location.protocol === "https:";
-  const allSeedsAreHttp = seeds.every((s) => s.startsWith("http://"));
+  if (seeds.length === 0) {
+    if (infoEl) {
+      infoEl.innerHTML = renderNodeInfoHtml({
+        isTestnet,
+        nodeOrigin: "(未接続)",
+        note: `<div style="color:#f97316;font-size:13px;">
+                 ⚠️ ${isTestnet ? "テストネット" : "メインネット"}のHTTPS対応シードノードが
+                 登録されていません。「設定 → 接続先ノードの変更」からHTTPS対応ノードの
+                 URLを手動で入力してください(${HTTPS_ONLY_NOTE})
+               </div>`,
+      });
+    }
+    return null;
+  }
 
   // シードノードをシャッフルして順番に試す
   const candidates = [...seeds].sort(() => Math.random() - 0.5);
@@ -80,48 +86,48 @@ export async function selectNode(isTestnet) {
     }
   }
 
-  // 全滅した場合は、それでも先頭のノードをそのまま返す
-  // (設定画面から手動で生きているノードに切り替えてもらう前提)
+  // 全滅した場合でも、http:// は絶対に返さない
+  // (設定画面から手動で生きているHTTPSノードに切り替えてもらう前提)
   const fallback = candidates[0];
-
   if (infoEl) {
-    const mixedContentHint =
-      pageIsHttps && allSeedsAreHttp
-        ? `<div style="color:#f97316;margin-top:6px;font-size:13px;">
-             ⚠️ このページはHTTPSで開かれていますが、既定のNIS1ノードは
-             すべてHTTPのみ対応のため接続できません(ブラウザのMixed Content制限)。<br>
-             「設定 → 接続先ノードの変更」からHTTPS対応ノードのURLを入力するか、
-             このアプリをHTTPで配信してください。詳しくはNOTES.mdを参照。
-           </div>`
-        : `<span style="color:#f97316;">シードノードへの接続に失敗しました。設定からノードを手動指定してください。</span>`;
-
     infoEl.innerHTML = renderNodeInfoHtml({
       isTestnet,
       nodeOrigin: fallback,
-      note: mixedContentHint,
+      note: `<span style="color:#f97316;">登録済みのHTTPS対応ノードに接続できませんでした。設定からノードを手動指定してください。</span>`,
     });
   }
   return fallback;
 }
 
 /**
- * 現在接続中のノードから、生きている他のピアの候補一覧を取得する
+ * 現在接続中のノードから、生きている他のピア(HTTPS版)の候補一覧を取得する
  * (設定画面のノード切替候補として利用)
+ *
+ * NIS1の /node/peer-list/reachable はピアの http(7890)情報しか返さないため、
+ * 「httpsは同じホストの7891番ポートで慣習的に提供される」という前提で
+ * 候補URLを組み立て、実際に生きているものだけに絞り込んで返す。
+ * (この前提が外れているノードは単に候補から漏れるだけで、実害はない)
  */
 export async function fetchReachablePeers(nodeUrl) {
   try {
     const res = await fetch(new URL("/node/peer-list/reachable", nodeUrl));
     const json = await res.json();
     const list = json?.data ?? [];
-    return list
-      .map((p) => {
-        const host = p?.endpoint?.host;
-        const port = p?.endpoint?.port;
-        const protocol = p?.endpoint?.protocol ?? "http";
-        if (!host || !port) return null;
-        return `${protocol}://${host}:${port}`;
-      })
-      .filter(Boolean);
+
+    const httpsCandidates = [
+      ...new Set(
+        list
+          .map((p) => p?.endpoint?.host)
+          .filter(Boolean)
+          .map((host) => `https://${host}:7891`)
+      ),
+    ].slice(0, 25); // 検証しすぎて重くならないよう上限を設ける
+
+    const checked = await Promise.all(
+      httpsCandidates.map(async (url) => ((await isNodeAlive(url, 2000)) != null ? url : null))
+    );
+
+    return checked.filter(Boolean);
   } catch (e) {
     console.warn("ピア一覧の取得に失敗しました", e);
     return [];
