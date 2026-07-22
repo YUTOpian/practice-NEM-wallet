@@ -1,64 +1,85 @@
 // nodeSelector.js
-// NodeWatch を使って優良ノードを 1 つ選ぶ
+// NIS1にはSymbolの NodeWatch のような第三者ノード監視サービスが無いため、
+// シードノードに順番に接続を試み、最初に応答した(生きている)ノードを採用する。
+// 生きているノードが見つかった場合は、そのノードの /node/peer-list/reachable
+// から他の生きているピアも取得できるようにしておく(設定画面のノード切替用)。
 
-import {
-    MAINNET_NODEWATCH_URL,
-    TESTNET_NODEWATCH_URL,
-    MAINNET_FALLBACK_NODES,
-    TESTNET_FALLBACK_NODES,
-} from "./config.js";
+import { MAINNET_SEED_NODES, TESTNET_SEED_NODES } from "./config.js";
+import { renderNodeInfoHtml } from "./utils.js";
 
-function pickRandom(list) {
-    return list[Math.floor(Math.random() * list.length)];
+function withTimeout(promise, ms) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), ms);
+  return { signal: controller.signal, clear: () => clearTimeout(timeoutId) };
+}
+
+async function isNodeAlive(nodeUrl, timeoutMs = 2500) {
+  const { signal, clear } = withTimeout(null, timeoutMs);
+  try {
+    const res = await fetch(new URL("/chain/height", nodeUrl), { signal });
+    clear();
+    if (!res.ok) return null;
+    const json = await res.json();
+    const height = json?.height;
+    return Number.isFinite(height) ? height : null;
+  } catch (e) {
+    clear();
+    return null;
+  }
 }
 
 export async function selectNode(isTestnet) {
-    const infoEl = document.getElementById("node-info");
+  const infoEl = document.getElementById("node-info");
+  const seeds = isTestnet ? TESTNET_SEED_NODES : MAINNET_SEED_NODES;
 
-    const NODEWATCH_URL = isTestnet
-        ? TESTNET_NODEWATCH_URL
-        : MAINNET_NODEWATCH_URL;
-    const FALLBACKS = isTestnet ? TESTNET_FALLBACK_NODES : MAINNET_FALLBACK_NODES;
+  if (infoEl) infoEl.textContent = "ノードに接続中…";
 
-    infoEl.textContent = "NodeWatch からノード選択中…";
+  // シードノードをシャッフルして順番に試す
+  const candidates = [...seeds].sort(() => Math.random() - 0.5);
 
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 1500);
-
-    try {
-        const res = await fetch(NODEWATCH_URL, { signal: controller.signal });
-        clearTimeout(timeoutId);
-
-        const nodes = await res.json();
-        if (!Array.isArray(nodes) || nodes.length === 0) {
-            throw new Error("NodeWatch empty");
-        }
-
-        // 高さでソートして一番進んでいるノードを採用
-        nodes.sort((a, b) => b.height - a.height);
-        const best = nodes[0];
-
-        const u = new URL(best.endpoint); // 例: https://xxx:3001
-        u.protocol = "https:"; // 念のため https 固定
-        const nodeOrigin = u.origin;
-
-        infoEl.innerHTML =
-            `<div style="font-size: 20px; font-weight: bold; color: #8ab4f8;">
-             ${isTestnet ? "🟡 Testnet" : "🟢 Mainnet"}
-             </div>` +
-            `使用ノード：<b>${nodeOrigin}</b><br>` +
-            `ブロック高：${best.height}`;
-
-        return nodeOrigin;
-    } catch (e) {
-        console.warn("NodeWatch 失敗 → fallback ノードを使用", e);
-        const fallback = pickRandom(FALLBACKS);
-
-        infoEl.innerHTML =
-            `接続中ネットワーク：<b>${isTestnet ? "Testnet" : "Mainnet"}</b><br>` +
-            `使用ノード：<b>${fallback}</b><br>` +
-            `<span style="color:#f97316;">NodeWatch 失敗のため fallback ノード</span>`;
-
-        return fallback;
+  for (const nodeUrl of candidates) {
+    const height = await isNodeAlive(nodeUrl);
+    if (height != null) {
+      if (infoEl) {
+        infoEl.innerHTML = renderNodeInfoHtml({ isTestnet, nodeOrigin: nodeUrl });
+      }
+      return nodeUrl;
     }
+  }
+
+  // 全滅した場合は、それでも先頭のノードをそのまま返す
+  // (settings画面から手動で生きているノードに切り替えてもらう前提)
+  const fallback = candidates[0];
+  if (infoEl) {
+    infoEl.innerHTML = renderNodeInfoHtml({
+      isTestnet,
+      nodeOrigin: fallback,
+      note: `<span style="color:#f97316;">シードノードへの接続に失敗しました。設定からノードを手動指定してください。</span>`,
+    });
+  }
+  return fallback;
+}
+
+/**
+ * 現在接続中のノードから、生きている他のピアの候補一覧を取得する
+ * (設定画面のノード切替候補として利用)
+ */
+export async function fetchReachablePeers(nodeUrl) {
+  try {
+    const res = await fetch(new URL("/node/peer-list/reachable", nodeUrl));
+    const json = await res.json();
+    const list = json?.data ?? [];
+    return list
+      .map((p) => {
+        const host = p?.endpoint?.host;
+        const port = p?.endpoint?.port;
+        const protocol = p?.endpoint?.protocol ?? "http";
+        if (!host || !port) return null;
+        return `${protocol}://${host}:${port}`;
+      })
+      .filter(Boolean);
+  } catch (e) {
+    console.warn("ピア一覧の取得に失敗しました", e);
+    return [];
+  }
 }
