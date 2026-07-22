@@ -1,25 +1,33 @@
-# Symbol Simple Wallet
+# NEM Simple Wallet
 
-**このアプリでは、XEMやXYMを管理する予定**  
-ブラウザだけで即使える、安全・シンプルなWebウォレットです。
+ブラウザだけで使える、シンプルなNEM (XEM) Webウォレットです。
+（元は Symbol 用ウォレットでしたが、`symbol-sdk` v3 に同梱されている
+  `NemFacade` を使って NEM(NIS1) 版に移植しました）
 
 ## 使い方
-1. [ここをクリックで即開く → GitHub Pages]https://yutopian.github.io/practice-wallet/
-3. 残高表示・XYM/モザイク送金が即可能！
+1. ニーモニックフレーズをインポートしてログイン
+2. 残高表示・XEM/モザイク送金・ステーキング(委任ハーベスティング)・
+   ネームスペース登録・モザイク作成・マルチシグが利用可能
 
-## モザイク送金
+## ログイン方法
+このアプリは **ニーモニックインポート / 秘密鍵インポートのみ** に対応しています。
+Symbol専用の署名拡張機能である SSS Extension は NEM では利用できないため、撤去しました。
 
-ウォレット内にあるモザイクを自動取得し、送金フォームのプルダウンから選択して送信できます。  
-モザイクIDや divisibility を手入力する必要はありません。
+## ⚠️ 重要: 実行前に必ずお読みください
+このコードは symbol-sdk v3 の `NemFacade` を使う想定で書いていますが、
+NEM(NIS1)向けの一部のトランザクション種別(マルチシグ設定/マルチシグ送金/
+連署、ハーベスト委任、ネームスペース登録、モザイク作成)のディスクリプタの
+正確なコンストラクタ引数は、実機での動作確認ができていません
+(このコードを生成した環境にはインターネット接続がなく、実際に
+ `npm install symbol-sdk` して動かして検証することができませんでした)。
 
-## 必須：SSS Extension
-このウォレットは **SSS Extension なしでは絶対に動きません**  
-（秘密鍵はSSS Extension内で完結するため、ウォレット側には一切出てきません）
+詳しくは [`NOTES.md`](./NOTES.md) を参照し、テストネットで一通り動作確認してから
+本番(メインネット)で使ってください。
 
-- Chrome拡張機能 → [インストール](https://chrome.google.com/webstore/detail/sss-extension/llildiojemakefgnhhkmiiffonembcan)
-
-[SSS Extensionの使い方・設定方法はこちら](https://docs.sss-symbol.com/ja/category/users-guide/)
-
-## 開発者向け詳細解説
-  
-[【Symbol】初めてのブロックチェーン開発でも作れる！Webウォレットの仕組みをコンポーネントごとに徹底解説（Qiita）](https://qiita.com/mikun/items/b04c240b927e7f45e44a)
+## ファイル構成
+```
+index.html
+css/base.css, css/wallet.css
+js/*.js
+sounds/*.ogg
+```
