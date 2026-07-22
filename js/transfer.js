@@ -1,15 +1,18 @@
 // transfer.js
-// Symbol SDK v3
-// モザイク送金トランザクション（SSS署名）
+// NEM (NIS1) 送金トランザクション
+//
+// ⚠️ 注意: NemFacadeのTransferTransactionディスクリプタのフィールド名は
+//   Symbol版の実装(descriptors.TransferTransactionV1Descriptor(recipientAddress,
+//   mosaics, message))に倣って推測実装している。実行前に一度、
+//   ブラウザのコンソールで `appState.sdkNem.descriptors` の中身を確認し、
+//   実際のクラス名・コンストラクタ引数と一致するか確認してください。
 
-import { appState } from "./config.js";
+import { appState, XEM_MOSAIC_KEY } from "./config.js";
 import { setStatus } from "./ui.js";
-import { requestSign } from "./signer.js";
+import { getRecipientPublicKey } from "./account.js";
+import { signAndAnnounceTx, encryptMessageLocally } from "./auth.js";
 
 export async function sendTx() {
-  /*
-    初期化確認
-  */
   if (
     !appState.NODE ||
     !appState.currentAddress ||
@@ -20,31 +23,21 @@ export async function sendTx() {
     return;
   }
 
-  /*
-    入力取得
-  */
   const recipientRaw = document.getElementById("tx-recipient").value.trim();
   const amountStr = document.getElementById("tx-amount").value;
   const messageText = document.getElementById("tx-message").value || "";
   const selectedMosaicId = document.getElementById("selected-mosaic-id")?.value;
 
-  /*
-    入力チェック
-  */
   if (!selectedMosaicId) {
     setStatus("tx-status", "モザイクを選択してください。", "error");
     return;
   }
-
   if (!recipientRaw || amountStr === "") {
     setStatus("tx-status", "アドレスと金額は必須です。", "error");
     return;
   }
 
-  /*
-    Address
-  */
-  const recipientAddress = new appState.sdkSymbol.Address(recipientRaw);
+  const recipientAddress = new appState.sdkNem.Address(recipientRaw);
   const amount = Number(amountStr);
 
   if (Number.isNaN(amount) || amount <= 0) {
@@ -52,86 +45,87 @@ export async function sendTx() {
     return;
   }
 
-  /*
-    Mosaic情報取得
-  */
   const divisibility = appState.mosaicInfo?.[selectedMosaicId]?.divisibility ?? 0;
+  const rawQuantity = BigInt(Math.floor(amount * (10 ** divisibility)));
 
   /*
-    Mosaic Descriptor作成
+    メッセージ
+    NEM: { type: 1(平文) | 2(暗号化), payload: bytes }
+    暗号化がチェックされている場合は、受信者の公開鍵を取得し
+    ローカル(ニーモニック/秘密鍵)署名アカウントの鍵でNEM方式の暗号化を行う。
   */
-  const mosaic = new appState.sdkSymbol.descriptors.UnresolvedMosaicDescriptor(
-    new appState.sdkSymbol.models.UnresolvedMosaicId(BigInt("0x" + selectedMosaicId)),
-    new appState.sdkSymbol.models.Amount(BigInt(Math.floor(amount * (10 ** divisibility))))
-  );
+  const shouldEncrypt = !!document.getElementById("tx-encrypt")?.checked;
+  let message;
+
+  if (shouldEncrypt && messageText.trim() !== "") {
+    try {
+      setStatus("tx-status", "受信者の公開鍵を取得中...");
+      const recipientPubKeyHex = await getRecipientPublicKey(recipientAddress);
+
+      setStatus("tx-status", "メッセージを暗号化しています...");
+      message = encryptMessageLocally(recipientPubKeyHex, messageText);
+    } catch (e) {
+      console.error("encrypt message error:", e);
+      setStatus(
+        "tx-status",
+        "メッセージの暗号化に失敗しました（受信者アカウントに公開鍵が公開されていない可能性があります）。",
+        "error"
+      );
+      return;
+    }
+  } else if (messageText.trim() !== "") {
+    message = {
+      type: 1,
+      payload: appState.sdkCore.utils.uint8ToHex(new TextEncoder().encode(messageText)),
+    };
+  } else {
+    message = { type: 0, payload: "" };
+  }
 
   /*
-    Message
-    速習Symbol v3形式
-    0x00 = Plain Message
+    Mosaic Descriptor
+    XEM自体を送る場合はmosaics:[]で amount にmicroXEMを指定、
+    カスタムモザイクを送る場合は mosaics:[{mosaicId, amount}] を使う想定。
   */
-  const messageBytes = new TextEncoder().encode(messageText);
-  const message = new Uint8Array([0x00, ...messageBytes]);
+  const { descriptors, models } = appState.sdkNem;
+  let mosaics = [];
+  let xemAmount = 0n;
 
-  /*
-    Transfer Descriptor
-    TransferTransactionV1
-  */
-  const descriptor = new appState.sdkSymbol.descriptors.TransferTransactionV1Descriptor(
+  if (selectedMosaicId === XEM_MOSAIC_KEY) {
+    xemAmount = rawQuantity;
+  } else {
+    const [namespaceId, name] = selectedMosaicId.split(":");
+    mosaics = [
+      {
+        mosaicId: new models.MosaicId(namespaceId, name),
+        amount: rawQuantity,
+      },
+    ];
+    // NEMのモザイク付き送金は、慣習上 amount に最低額(1 microXEM相当)を
+    // 入れておく実装が多い(手数料計算に影響するため)
+    xemAmount = 1n;
+  }
+
+  const descriptor = new descriptors.TransferTransactionV1Descriptor(
     recipientAddress,
-    [mosaic],
+    xemAmount,
+    mosaics,
     message
   );
 
-  /*
-    Transaction作成
-    feeMultiplier 100
-    deadline 1時間
-  */
   const tx = appState.facade.createTransactionFromTypedDescriptor(
     descriptor,
     appState.currentPubKey,
-    100,
-    60 * 60
+    appState.feeMultiplier ?? 1,
+    60 * 60 // deadline 1時間
   );
 
-  /*
-    SSSへ渡すpayload生成
-    Symbol v3 serialized transaction
-  */
-  const payload = appState.sdkCore.utils.uint8ToHex(tx.serialize());
-
   try {
-    setStatus("tx-status", "署名待ち...");
-
-    /*
-      署名（SSS or ニーモニック、どちらのモードでも共通インターフェース）
-    */
-    const signed = await requestSign(payload);
-
-    /*
-      Announce
-      /transactions PUT
-    */
-    const response = await fetch(new URL("/transactions", appState.NODE), {
-      method: "PUT",
-      headers: {
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({ payload: signed.payload })
-    });
-
-    const result = await response.json();
-    console.log("announce result:", result);
-
-    if (response.ok) {
-      const hash = appState.facade.hashTransaction(tx).toString();
-      setStatus("tx-status", `送金しました。\nHash: ${hash}`, "success");
-    } else {
-      setStatus("tx-status", result.message ?? "アナウンス失敗", "error");
-    }
-  } catch(e) {
+    setStatus("tx-status", "署名しています...");
+    const hash = await signAndAnnounceTx(tx);
+    setStatus("tx-status", `送金しました。\nHash: ${hash}`, "success");
+  } catch (e) {
     console.error("transfer error:", e);
-    setStatus("tx-status", "署名または送信に失敗しました。", "error");
+    setStatus("tx-status", e.message || "署名または送信に失敗しました。", "error");
   }
 }
