@@ -12,12 +12,14 @@
 // 慣習的に立てています。config.js の MAINNET_SEED_NODES には、
 // https://nemnodes.org/nodes 上でHTTPS対応が確認できたノードのみを
 // 登録しています。
+//
+// 接続できるHTTPS対応ノードが1つも見つからない場合、この関数は
+// (画面に詳細な警告文を出すのではなく) null を返すだけにしてあります。
+// 呼び出し側(index.js)で `if (!node) alert("ノードに接続できません")`
+// のように、シンプルなアラートで知らせる設計にしています。
 
 import { MAINNET_SEED_NODES, TESTNET_SEED_NODES } from "./config.js";
 import { renderNodeInfoHtml } from "./utils.js";
-
-const HTTPS_ONLY_NOTE =
-  "このアプリはHTTPS対応ノードにのみ接続します。http://のノードは指定できません。";
 
 export function isHttpsUrl(nodeUrl) {
   try {
@@ -51,6 +53,10 @@ export async function isNodeAlive(nodeUrl, timeoutMs = 2500) {
   }
 }
 
+/**
+ * HTTPS対応ノードを1つ選んで返す。
+ * 接続できるノードが無ければ null を返す(画面への警告表示はしない)。
+ */
 export async function selectNode(isTestnet) {
   const infoEl = document.getElementById("node-info");
   const allSeeds = isTestnet ? TESTNET_SEED_NODES : MAINNET_SEED_NODES;
@@ -60,15 +66,7 @@ export async function selectNode(isTestnet) {
 
   if (seeds.length === 0) {
     if (infoEl) {
-      infoEl.innerHTML = renderNodeInfoHtml({
-        isTestnet,
-        nodeOrigin: "(未接続)",
-        note: `<div style="color:#f97316;font-size:13px;">
-                 ⚠️ ${isTestnet ? "テストネット" : "メインネット"}のHTTPS対応シードノードが
-                 登録されていません。「設定 → 接続先ノードの変更」からHTTPS対応ノードの
-                 URLを手動で入力してください(${HTTPS_ONLY_NOTE})
-               </div>`,
-      });
+      infoEl.innerHTML = renderNodeInfoHtml({ isTestnet, nodeOrigin: "(未接続)" });
     }
     return null;
   }
@@ -86,17 +84,11 @@ export async function selectNode(isTestnet) {
     }
   }
 
-  // 全滅した場合でも、http:// は絶対に返さない
-  // (設定画面から手動で生きているHTTPSノードに切り替えてもらう前提)
-  const fallback = candidates[0];
+  // 全滅した場合は null を返す(http://へのフォールバックは絶対にしない)
   if (infoEl) {
-    infoEl.innerHTML = renderNodeInfoHtml({
-      isTestnet,
-      nodeOrigin: fallback,
-      note: `<span style="color:#f97316;">登録済みのHTTPS対応ノードに接続できませんでした。設定からノードを手動指定してください。</span>`,
-    });
+    infoEl.innerHTML = renderNodeInfoHtml({ isTestnet, nodeOrigin: "(未接続)" });
   }
-  return fallback;
+  return null;
 }
 
 /**
