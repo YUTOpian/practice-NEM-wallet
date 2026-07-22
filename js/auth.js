@@ -279,10 +279,13 @@ let sessionKey = null;
 
 /*
   ボールトの状態:
-    "none"      … 何も保存されていない(ログアウト直後)
-    "plain"     … パスワード未設定。ログアウトするまでは平文でこの端末に保存し、
-                   次回リロード時は確認なしで自動ログインする
-    "encrypted" … パスワード設定済み。次回はパスワード入力が必要
+    "none"      … 何も保存されていない(ログアウト直後、または未設定)
+    "encrypted" … パスワード設定済み。リロード後は必ずパスワード入力が必要
+
+  ※ パスワードを設定しない「あとで設定」は廃止した。
+    パスワードが設定されるまでは何も永続化しない(persistAccountsが無視する)ため、
+    ページのリロードや意図しない終了があった場合、その時点でパスワード未設定なら
+    アカウント作成からやり直しになる(＝毎回パスワード入力を必須にするため)。
 */
 export function getVaultMode() {
   const encRaw = localStorage.getItem(VAULT_KEY);
@@ -293,10 +296,6 @@ export function getVaultMode() {
       /* ignore */
     }
   }
-
-  const plainRaw = sessionStorage.getItem(VAULT_KEY);
-  if (plainRaw) return "plain";
-
   return "none";
 }
 
@@ -306,7 +305,7 @@ export function hasVault() {
 
 export function clearVault() {
   localStorage.removeItem(VAULT_KEY);
-  sessionStorage.removeItem(VAULT_KEY);
+  sessionStorage.removeItem(VAULT_KEY); // 過去バージョンの平文保存が残っていた場合の掃除
   sessionSalt = null;
   sessionKey = null;
 }
@@ -315,30 +314,29 @@ async function persistAccounts() {
   const persistable = appState.accounts;
   if (persistable.length === 0) return;
 
+  // パスワード(暗号化キー)が未設定の間は何も永続化しない
+  // (パスワード設定は必須のため、設定されるまでは保存しない)
+  if (!sessionKey || !sessionSalt) return;
+
   const payload = {
     accounts: persistable,
     networkType: appState.networkType,
     activeAccountId: appState.activeAccountId,
   };
 
-  if (sessionKey && sessionSalt) {
-    const iv = crypto.getRandomValues(new Uint8Array(12));
-    const plain = new TextEncoder().encode(JSON.stringify(payload));
-    const cipher = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, sessionKey, plain);
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const plain = new TextEncoder().encode(JSON.stringify(payload));
+  const cipher = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, sessionKey, plain);
 
-    localStorage.setItem(
-      VAULT_KEY,
-      JSON.stringify({
-        encrypted: true,
-        salt: bufToBase64(sessionSalt),
-        iv: bufToBase64(iv),
-        cipher: bufToBase64(cipher),
-      })
-    );
-    sessionStorage.removeItem(VAULT_KEY);
-  } else {
-    sessionStorage.setItem(VAULT_KEY, JSON.stringify(payload));
-  }
+  localStorage.setItem(
+    VAULT_KEY,
+    JSON.stringify({
+      encrypted: true,
+      salt: bufToBase64(sessionSalt),
+      iv: bufToBase64(iv),
+      cipher: bufToBase64(cipher),
+    })
+  );
 }
 
 function restoreAccountsPayload(payload) {
@@ -356,15 +354,6 @@ function restoreAccountsPayload(payload) {
   return targetId;
 }
 
-export async function restorePlainVault() {
-  const raw = sessionStorage.getItem(VAULT_KEY);
-  if (!raw) throw new Error("保存されたアカウントがありません");
-
-  const payload = JSON.parse(raw);
-  const targetId = restoreAccountsPayload(payload);
-  await switchToAccount(targetId);
-}
-
 export async function saveVault(password) {
   const salt = crypto.getRandomValues(new Uint8Array(16));
   const key = await deriveKeyFromPassword(password, salt);
@@ -372,6 +361,7 @@ export async function saveVault(password) {
   sessionKey = key;
   await persistAccounts();
 }
+
 
 export async function unlockVault(password) {
   const raw = localStorage.getItem(VAULT_KEY);
@@ -452,11 +442,11 @@ export async function signAndAnnounceTx(tx) {
 }
 
 /* ============================================================
-   ログイン画面に戻る(保存データは削除しない)
-   ログアウトと違い、保存済みのアカウント情報(パスワードで暗号化されたもの、
-   または平文保存されたもの)はそのまま残す。単に今のセッションを終了して
-   ログイン画面(パスワード入力 または ようこそ画面)に戻すだけの処理。
-   実際にどちらの画面を表示するかは、呼び出し側で getVaultMode() を見て判断する。
+   ログイン画面(パスワード入力画面)に戻る(保存データは削除しない)
+   ログアウトと違い、パスワードで暗号化して保存済みのアカウント情報は
+   そのまま残す。単に今のセッションを終了して、パスワード入力画面
+   (保存データが無ければ、やむを得ずようこそ画面)に戻すだけの処理。
+   実際にどちらの画面を表示するかは、呼び出し側で hasVault() を見て判断する。
 ============================================================ */
 export function returnToLoginScreen() {
   closeWebSocket();
