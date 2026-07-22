@@ -3,14 +3,14 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Symbol Simple Wallet</title>
+  <title>NEM Simple Wallet</title>
   <link rel="stylesheet" href="css/base.css" />
   <link rel="stylesheet" href="css/wallet.css" />
 </head>
 <body>
 
 <header>
-  <h2>Symbol Simple Wallet</h2>
+  <h2>NEM Simple Wallet</h2>
   <div class="header-info">
     <p><span id="node-info">---</span></p>
   </div>
@@ -19,45 +19,92 @@
 <div class="container">
 
   <!-- ============================================================
-       接続方法選択画面
+       ログイン方法選択画面
   ============================================================ -->
-  <div id="connect-page" class="page active">
+  <div id="welcome-page" class="page active">
     <div class="card">
-      <h2>接続方法を選択</h2>
+      <h2>ようこそ</h2>
+      <p style="font-size:13px;color:#94a3b8;">
+        ログイン方法を選んでください。
+      </p>
 
-      <button id="connect-sss-btn" class="button-primary">SSS Extensionで接続</button>
+      <div class="settings-menu">
+        <button id="choose-mnemonic" class="settings-menu-item">
+          📝 ニーモニックをインポートする
+        </button>
+      </div>
+
+      <div id="welcome-status"></div>
+    </div>
+  </div>
+
+  <!-- ============================================================
+       ニーモニックインポート画面
+  ============================================================ -->
+  <div id="mnemonic-import-page" class="page">
+    <div class="card">
+      <h2>ニーモニックのインポート</h2>
+      <button id="back-welcome-mnemonic" class="button-primary">← 戻る</button>
+
+      <p style="font-size:13px;color:#94a3b8;">
+        12語または24語のニーモニックフレーズを入力してください。この端末以外には送信されません。
+      </p>
+
+      <textarea id="mnemonic-input" class="input-box" placeholder="単語をスペース区切りで入力"></textarea>
+
+      <p><b>ネットワーク：</b></p>
+      <select id="mnemonic-network-select" class="input-box">
+        <option value="mainnet">Mainnet</option>
+        <option value="testnet">Testnet</option>
+      </select>
+
+      <button id="import-mnemonic-btn" class="button-primary">インポートする</button>
+      <div id="mnemonic-import-status"></div>
+    </div>
+  </div>
+
+  <!-- ============================================================
+       パスワード設定画面(任意・インポート直後に表示)
+  ============================================================ -->
+  <div id="password-setup-page" class="page">
+    <div class="card">
+      <h2>パスワードの設定（任意）</h2>
+      <p style="font-size:13px;color:#94a3b8;">
+        パスワードを設定すると、暗号化してこの端末に保存され、次回はパスワード入力でログインできます。
+        設定しない場合も、ログアウトするまではこの端末に保存され、次回リロード時は確認なしでそのままログインした状態になります
+        （ただし暗号化されないため、端末を共有している場合はパスワード設定をおすすめします）。
+      </p>
+
+      <input id="setup-password-input" class="input-box" type="password" placeholder="パスワード（8文字以上推奨）">
+      <input id="setup-password-confirm" class="input-box" type="password" placeholder="パスワード（確認）">
+
+      <button id="save-password-btn" class="button-primary">パスワードを設定して保存する</button>
+      <button id="skip-password-btn" class="button-primary">設定しない（このまま進む）</button>
+      <div id="password-setup-status"></div>
+    </div>
+  </div>
+
+  <!-- ============================================================
+       ロック解除画面(保存済みアカウントがある場合)
+  ============================================================ -->
+  <div id="unlock-page" class="page">
+    <div class="card">
+      <h2>ログイン</h2>
+      <p style="font-size:13px;color:#94a3b8;">
+        以前このアプリでパスワードを設定してアカウントを保存しています。そのパスワードを入力してください。
+      </p>
+
+      <input id="unlock-password-input" class="input-box" type="password" placeholder="パスワード">
+      <button id="unlock-btn" class="button-primary">ログイン</button>
+      <div id="unlock-status"></div>
 
       <hr>
 
-      <h3>ニーモニックでログイン</h3>
       <p style="font-size:13px;color:#94a3b8;">
-        ニーモニックをインポートするとブラウザ内で署名するため、SSS Extension経由より
-        セキュリティ上のリスクが高くなります。自己責任でご利用ください。
+        パスワードを設定した覚えがない、または忘れてしまった場合は、この端末に保存されたデータを削除して
+        ニーモニックの入力からやり直せます（ニーモニックさえ分かっていれば、資産がなくなることはありません）。
       </p>
-
-      <div id="mnemonic-has-stored" style="display:none;">
-        <p>保存されたニーモニックがあります。</p>
-        <input id="mnemonic-password-input" type="password" class="input-box" placeholder="パスワード">
-        <button id="mnemonic-unlock-btn" class="button-primary">ロック解除して接続</button>
-        <button id="mnemonic-forget-btn" class="button-primary">保存済みニーモニックを削除</button>
-        <hr>
-      </div>
-
-      <div id="mnemonic-new-import">
-        <textarea id="mnemonic-input" class="input-box" placeholder="ニーモニック（12/24単語、スペース区切り）を入力"></textarea>
-
-        <select id="mnemonic-network-select" class="input-box">
-          <option value="mainnet">Mainnet</option>
-          <option value="testnet">Testnet</option>
-        </select>
-
-        <input id="mnemonic-account-index" class="input-box" type="number" value="0" placeholder="アカウントインデックス（通常は0）">
-        <input id="mnemonic-new-password" type="password" class="input-box" placeholder="次回から自動ログインするためのパスワード（空欄なら保存しない）">
-
-        <button id="mnemonic-import-btn" class="button-primary">インポートして接続</button>
-      </div>
-
-      <div id="connect-status" style="margin-top:12px;"></div>
+      <button id="forget-account-btn" class="button-primary">保存データを削除してやり直す</button>
     </div>
   </div>
 
@@ -66,7 +113,18 @@
   ============================================================ -->
   <div id="account-page" class="page">
     <div class="card">
-      <h2>アカウント情報</h2>
+    <div class="card-title-row">
+      <div class="title-with-switcher">
+        <h2>アカウント情報</h2>
+        <button id="account-switch-btn" class="chevron-btn" title="アカウント切替" style="display:none;">▼</button>
+      </div>
+      <button id="settings-btn" class="settings-gear-btn" title="設定" aria-label="設定">
+        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="3"></circle>
+          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+        </svg>
+      </button>
+    </div>
 
       <p><b>アドレス：</b></p>
       <div class="address-row">
@@ -83,6 +141,7 @@
         <button id="receive-btn" class="button-primary">受け取り</button>
         <button id="send-btn" class="button-primary">送金</button>
         <button id="harvest-btn" class="button-primary">ステーキング</button>
+        <button id="advanced-btn" class="button-primary">高度機能</button>
       </div>
 
       <hr>
@@ -198,6 +257,395 @@
       <button id="start-harvest-btn" class="button-primary">開始</button>
       <button id="stop-harvest-btn" class="button-primary">停止</button>
       <div id="harvest-status">状態確認中...</div>
+    </div>
+  </div>
+
+  <!-- ============================================================
+       設定メニュー画面
+  ============================================================ -->
+  <div id="settings-page" class="page">
+    <div class="card">
+      <h2>設定</h2>
+      <button id="back-account-settings" class="button-primary">← 戻る</button>
+
+      <div class="settings-menu">
+        <button id="menu-node-settings" class="settings-menu-item">
+          接続先ノードの変更
+        </button>
+        <button id="menu-fee-settings" class="settings-menu-item">
+          送金手数料の設定
+        </button>
+        <button id="menu-add-mnemonic" class="settings-menu-item">
+          📝 ニーモニックでアカウント追加
+        </button>
+        <button id="menu-add-privatekey" class="settings-menu-item">
+          🔑 秘密鍵でアカウント追加
+        </button>
+        <button id="logout-btn" class="settings-menu-item">
+          🚪 ログアウト
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================================================
+       接続先ノードの変更画面
+  ============================================================ -->
+  <div id="node-settings-page" class="page">
+    <div class="card">
+      <h2>接続先ノードの変更</h2>
+      <button id="back-settings-node" class="button-primary">← 戻る</button>
+
+      <p><b>現在のノード：</b></p>
+      <div id="current-node-display" class="address-text">---</div>
+
+      <hr>
+
+      <h3>ノード候補</h3>
+      <select id="node-settings-select" class="input-box">
+        <option value="">-- 候補を読み込み中... --</option>
+      </select>
+      <input id="node-settings-input" class="input-box" placeholder="または直接ノードURLを入力 (例: https://xxx.xxx.jp:3001)">
+
+      <button id="apply-node-btn" class="button-primary">このノードに接続する</button>
+      <div id="node-settings-status"></div>
+    </div>
+  </div>
+
+  <!-- ============================================================
+       送金手数料の設定画面
+  ============================================================ -->
+  <div id="fee-settings-page" class="page">
+    <div class="card">
+      <h2>送金手数料の設定</h2>
+      <button id="back-settings-fee" class="button-primary">← 戻る</button>
+
+      <p style="font-size:13px;color:#94a3b8;">
+        NEM(NIS1)には手数料スケジュールを取得するAPIが無いため、ここでは
+        「基準手数料の何倍を払うか」という倍率で指定します。タップすると下の入力欄に反映されます。
+      </p>
+
+      <div id="fee-options">
+        <div class="fee-option" data-speed="slow">
+          <div class="fee-option-title">🐢 遅い（安い）</div>
+          <div class="fee-option-value" id="fee-slow-value">---</div>
+        </div>
+        <div class="fee-option" data-speed="average">
+          <div class="fee-option-title">🚶 平均</div>
+          <div class="fee-option-value" id="fee-average-value">---</div>
+        </div>
+        <div class="fee-option" data-speed="fast">
+          <div class="fee-option-title">🚀 速い（高い）</div>
+          <div class="fee-option-value" id="fee-fast-value">---</div>
+        </div>
+      </div>
+
+      <hr>
+
+      <p><b>手数料倍率（実際に送金時に使う値）：</b></p>
+      <input id="fee-custom-input" class="input-box" type="number" min="0" step="0.1" placeholder="例: 1">
+
+      <button id="apply-fee-btn" class="button-primary">この設定を保存する</button>
+      <div id="fee-settings-status"></div>
+    </div>
+  </div>
+
+  <!-- ============================================================
+       アカウント切替画面
+  ============================================================ -->
+  <div id="account-switcher-page" class="page">
+    <div class="card">
+      <h2>アカウント切替</h2>
+      <button id="back-account-switcher" class="button-primary">← 戻る</button>
+
+      <div id="account-switcher-list"></div>
+
+      <hr>
+
+      <button id="add-account-btn" class="button-primary">＋ アカウントを追加</button>
+      <button id="manage-hidden-accounts-btn" class="button-primary">非表示のアカウントを管理</button>
+    </div>
+  </div>
+
+  <!-- ============================================================
+       非表示アカウント管理画面
+  ============================================================ -->
+  <div id="hidden-accounts-page" class="page">
+    <div class="card">
+      <h2>非表示のアカウント</h2>
+      <button id="back-hidden-accounts" class="button-primary">← 戻る</button>
+
+      <div id="hidden-account-list"></div>
+    </div>
+  </div>
+
+  <!-- ============================================================
+       アカウント追加方法選択画面
+  ============================================================ -->
+  <div id="add-account-menu-page" class="page">
+    <div class="card">
+      <h2>アカウントの追加</h2>
+      <button id="back-add-account-menu" class="button-primary">← 戻る</button>
+
+      <div class="settings-menu">
+        <button id="add-account-mnemonic-choice" class="settings-menu-item">
+          📝 ニーモニックで追加
+        </button>
+        <button id="add-account-privatekey-choice" class="settings-menu-item">
+          🔑 秘密鍵で追加
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================================================
+       ニーモニックでアカウント追加
+  ============================================================ -->
+  <div id="add-account-mnemonic-page" class="page">
+    <div class="card">
+      <h2>ニーモニックでアカウント追加</h2>
+      <button id="back-add-account-mnemonic" class="button-primary">← 戻る</button>
+
+      <textarea id="add-mnemonic-input" class="input-box" placeholder="単語をスペース区切りで入力"></textarea>
+
+      <p><b>アカウントインデックス：</b></p>
+      <input id="add-mnemonic-index" class="input-box" type="number" min="0" value="0">
+      <p style="font-size:13px;color:#94a3b8;">
+        同じニーモニックでも番号を変えると別のアカウントになります。未使用の番号が自動で入力されています。
+      </p>
+
+      <input id="add-mnemonic-label" class="input-box" placeholder="ラベル（任意）">
+
+      <button id="add-mnemonic-submit" class="button-primary">追加する</button>
+      <div id="add-mnemonic-status"></div>
+    </div>
+  </div>
+
+  <!-- ============================================================
+       秘密鍵でアカウント追加
+  ============================================================ -->
+  <div id="add-account-privatekey-page" class="page">
+    <div class="card">
+      <h2>秘密鍵でアカウント追加</h2>
+      <button id="back-add-account-privatekey" class="button-primary">← 戻る</button>
+
+      <input id="add-privatekey-input" class="input-box" placeholder="秘密鍵（64桁の16進数）">
+      <input id="add-privatekey-label" class="input-box" placeholder="ラベル（任意）">
+
+      <button id="add-privatekey-submit" class="button-primary">追加する</button>
+      <div id="add-privatekey-status"></div>
+    </div>
+  </div>
+
+  <!-- ============================================================
+       高度機能メニュー
+  ============================================================ -->
+  <div id="advanced-page" class="page">
+    <div class="card">
+      <h2>高度機能</h2>
+      <button id="back-account-advanced" class="button-primary">← 戻る</button>
+
+      <div class="settings-menu">
+        <button id="menu-namespace" class="settings-menu-item">
+          🏷️ ネームスペースの登録
+        </button>
+        <button id="menu-mosaic" class="settings-menu-item">
+          🪙 モザイクの作成
+        </button>
+        <button id="menu-multisig" class="settings-menu-item">
+          👥 マルチシグ
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================================================
+       ネームスペース登録
+  ============================================================ -->
+  <div id="namespace-page" class="page">
+    <div class="card">
+      <h2>ネームスペースの登録</h2>
+      <button id="back-advanced-namespace" class="button-primary">← 戻る</button>
+
+      <h3>ルートネームスペースを作成</h3>
+      <p style="font-size:13px;color:#94a3b8;">
+        NEMのネームスペースは有効期間を指定できません(ネットワーク規定の期間で取得され、レンタル料がXEMで徴収されます)。
+      </p>
+      <input id="root-namespace-name" class="input-box" placeholder="ネームスペース名 (例: my_namespace)">
+      <button id="register-root-namespace-btn" class="button-primary">ルートネームスペースを登録</button>
+      <div id="root-namespace-status"></div>
+
+      <hr>
+
+      <h3>子ネームスペースを作成</h3>
+      <p style="font-size:13px;color:#94a3b8;">親は自分が保有するネームスペースから選択してください。</p>
+      <select id="child-namespace-parent-select" class="input-box">
+        <option value="">-- 読み込み中... --</option>
+      </select>
+      <input id="child-namespace-name" class="input-box" placeholder="子ネームスペース名">
+      <button id="register-child-namespace-btn" class="button-primary">子ネームスペースを登録</button>
+      <div id="child-namespace-status"></div>
+
+      <hr>
+
+      <h3>保有ネームスペース一覧</h3>
+      <div id="namespace-list">読み込み中...</div>
+    </div>
+  </div>
+
+  <!-- ============================================================
+       モザイク作成
+  ============================================================ -->
+  <div id="mosaic-page" class="page">
+    <div class="card">
+      <h2>モザイクの作成</h2>
+      <button id="back-advanced-mosaic" class="button-primary">← 戻る</button>
+
+      <h3>新規モザイク作成</h3>
+
+      <p style="font-size:13px;color:#94a3b8;">
+        NEMのモザイクは、必ず自分が保有するネームスペースの下に作成されます
+        (namespace:mosaicName の形。後から別のネームスペースへ付け替えることはできません)。
+      </p>
+
+      <p><b>作成先ネームスペース：</b></p>
+      <select id="mosaic-link-namespace-select" class="input-box">
+        <option value="">-- 読み込み中... --</option>
+      </select>
+
+      <p><b>モザイク名：</b></p>
+      <input id="mosaic-name-input" class="input-box" placeholder="例: coupon">
+
+      <p><b>説明文：</b></p>
+      <input id="mosaic-description-input" class="input-box" placeholder="例: my mosaic" maxlength="128">
+
+      <p><b>可分性 (divisibility)：</b></p>
+      <input id="mosaic-divisibility" class="input-box" type="number" min="0" max="6" value="0">
+
+      <p><b>初期供給量：</b></p>
+      <input id="mosaic-initial-supply" class="input-box" type="number" min="0" value="1000">
+
+      <label class="encrypt-option">
+        <input type="checkbox" id="mosaic-transferable" checked>
+        <span>第三者へ譲渡可能(transferable)</span>
+      </label>
+      <label class="encrypt-option">
+        <input type="checkbox" id="mosaic-supply-mutable">
+        <span>供給量変更可能(supplyMutable)</span>
+      </label>
+
+      <button id="create-mosaic-btn" class="button-primary">モザイクを作成する</button>
+      <div id="mosaic-create-status"></div>
+
+      <hr>
+
+      <h3>保有モザイク一覧</h3>
+      <div id="owned-mosaic-list">読み込み中...</div>
+    </div>
+  </div>
+
+  <!-- ============================================================
+       マルチシグメニュー
+  ============================================================ -->
+  <div id="multisig-menu-page" class="page">
+    <div class="card">
+      <h2>マルチシグ</h2>
+      <button id="back-advanced-multisig-menu" class="button-primary">← 戻る</button>
+
+      <div class="settings-menu">
+        <button id="menu-multisig-send" class="settings-menu-item">
+          💸 マルチシグ送金
+        </button>
+        <button id="menu-multisig-sign" class="settings-menu-item">
+          ✍️ マルチシグ署名
+        </button>
+        <button id="menu-multisig-settings" class="settings-menu-item">
+          ⚙️ マルチシグ設定
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================================================
+       マルチシグ設定
+  ============================================================ -->
+  <div id="multisig-settings-page" class="page">
+    <div class="card">
+      <h2>マルチシグ設定</h2>
+      <button id="back-multisig-menu-settings" class="button-primary">← 戻る</button>
+
+      <p style="font-size:13px;color:#94a3b8;">
+        設定対象は、今ログイン中のアカウント自身です。NEMのマルチシグ設定変更は
+        Symbolと異なり、他の連署者の事前同意は不要で、送信すると即座に反映されます
+        （追加する連署者は「アドレス」ではなく「公開鍵」で指定する必要がある点にご注意ください）。
+      </p>
+
+      <h3>現在の状態</h3>
+      <div id="multisig-info">読み込み中...</div>
+
+      <hr>
+
+      <h3>変更内容</h3>
+
+      <p><b>追加する連署者の公開鍵（1行に1つ）：</b></p>
+      <textarea id="multisig-add-addresses" class="input-box" placeholder="64桁の16進数公開鍵"></textarea>
+
+      <p><b>削除する連署者の公開鍵（1行に1つ）：</b></p>
+      <textarea id="multisig-remove-addresses" class="input-box" placeholder="64桁の16進数公開鍵"></textarea>
+
+      <p><b>最小承認者数の増減（minApprovalDelta）：</b></p>
+      <input id="multisig-min-approval-delta" class="input-box" type="number" value="0">
+
+      <button id="submit-multisig-settings-btn" class="button-primary">この内容で提案する</button>
+      <div id="multisig-settings-status"></div>
+    </div>
+  </div>
+
+  <!-- ============================================================
+       マルチシグ送金
+  ============================================================ -->
+  <div id="multisig-send-page" class="page">
+    <div class="card">
+      <h2>マルチシグ送金</h2>
+      <button id="back-multisig-menu-send" class="button-primary">← 戻る</button>
+
+      <p style="font-size:13px;color:#94a3b8;">
+        自分が連署者になっているマルチシグアカウントから送金を提案します
+        （必要な承認数に応じて、他の連署者が「マルチシグ署名」から承認するまで確定しません）。
+      </p>
+
+      <p><b>送金元マルチシグアカウント：</b></p>
+      <select id="multisig-send-from-select" class="input-box">
+        <option value="">-- 読み込み中... --</option>
+      </select>
+
+      <p><b>宛先アドレス：</b></p>
+      <input id="multisig-send-recipient" class="input-box" placeholder="宛先アドレス">
+
+      <p><b>送金額（XEM）：</b></p>
+      <input id="multisig-send-amount" class="input-box" type="number" min="0" step="any" value="0">
+
+      <p><b>メッセージ（任意）：</b></p>
+      <textarea id="multisig-send-message" class="input-box" placeholder="メッセージ"></textarea>
+
+      <button id="submit-multisig-send-btn" class="button-primary">この内容で提案する</button>
+      <div id="multisig-send-status"></div>
+    </div>
+  </div>
+
+  <!-- ============================================================
+       マルチシグ署名
+  ============================================================ -->
+  <div id="multisig-sign-page" class="page">
+    <div class="card">
+      <h2>マルチシグ署名</h2>
+      <button id="back-multisig-menu-sign" class="button-primary">← 戻る</button>
+
+      <p style="font-size:13px;color:#94a3b8;">
+        自分の連署が必要な、保留中のトランザクション一覧です。
+      </p>
+
+      <div id="multisig-pending-list">読み込み中...</div>
     </div>
   </div>
 
