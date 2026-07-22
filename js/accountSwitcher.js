@@ -9,7 +9,6 @@ function shortAddr(addr) {
 }
 
 function sourceLabel(source) {
-  if (source === "sss") return "SSS Extension";
   if (source === "mnemonic") return "ニーモニック由来";
   if (source === "privateKey") return "秘密鍵インポート";
   return source;
@@ -18,8 +17,7 @@ function sourceLabel(source) {
 export function updateSwitcherVisibility() {
   const btn = document.getElementById("account-switch-btn");
   if (!btn) return;
-  const show = appState.accounts.length > 0 && appState.authMode !== "sss";
-  btn.style.display = show ? "inline-flex" : "none";
+  btn.style.display = appState.accounts.length > 0 ? "inline-flex" : "none";
 }
 
 /* ============================================================
