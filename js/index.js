@@ -29,6 +29,9 @@ import {
   addAccountFromPrivateKey,
   addNextAccountFromCurrentMnemonic,
   hasCurrentMnemonic,
+  generateNewMnemonic,
+  returnToLoginScreen,
+  switchNetwork,
 } from "./auth.js";
 import {
   updateSwitcherVisibility,
@@ -63,6 +66,7 @@ window.addEventListener("load", async () => {
   // ============================
   const welcomePage = document.getElementById("welcome-page");
   const mnemonicImportPage = document.getElementById("mnemonic-import-page");
+  const createNewPage = document.getElementById("create-new-page");
   const passwordSetupPage = document.getElementById("password-setup-page");
   const unlockPage = document.getElementById("unlock-page");
   const accountPage = document.getElementById("account-page");
@@ -71,6 +75,7 @@ window.addEventListener("load", async () => {
   const receivePage = document.getElementById("receive-page");
   const harvestPage = document.getElementById("harvest-page");
   const settingsPage = document.getElementById("settings-page");
+  const networkSettingsPage = document.getElementById("network-settings-page");
   const nodeSettingsPage = document.getElementById("node-settings-page");
   const feeSettingsPage = document.getElementById("fee-settings-page");
   const accountSwitcherPage = document.getElementById("account-switcher-page");
@@ -119,8 +124,8 @@ window.addEventListener("load", async () => {
   }
 
   // ============================
-  // ニーモニックインポート画面へ
-  // (ウェルカム画面にはニーモニック選択肢のみ。SSS Extensionは非対応)
+  // ニーモニックインポート画面へ / 新規作成画面へ
+  // (ウェルカム画面はニーモニック関連の選択肢のみ。SSS Extensionは非対応)
   // ============================
   document.getElementById("choose-mnemonic")?.addEventListener("click", () => {
     showPage(mnemonicImportPage);
@@ -147,6 +152,59 @@ window.addEventListener("load", async () => {
     } catch (e) {
       console.error("loginWithMnemonic error:", e);
       setStatus("mnemonic-import-status", e.message || "インポートに失敗しました。", "error");
+      alert(e.message || "ノードに接続できません");
+    }
+  });
+
+  // ============================
+  // 新規作成画面
+  // ============================
+  let generatedMnemonicPhrase = null;
+
+  document.getElementById("choose-create-new")?.addEventListener("click", () => {
+    generatedMnemonicPhrase = null;
+    document.getElementById("generated-mnemonic-area").style.display = "none";
+    document.getElementById("generated-mnemonic-display").textContent = "";
+    setStatus("create-new-status", "", "default");
+    showPage(createNewPage);
+  });
+
+  document.getElementById("back-welcome-create-new")?.addEventListener("click", () => showPage(welcomePage));
+
+  document.getElementById("generate-mnemonic-btn")?.addEventListener("click", async () => {
+    setStatus("create-new-status", "生成中...");
+    try {
+      generatedMnemonicPhrase = await generateNewMnemonic();
+      document.getElementById("generated-mnemonic-display").textContent = generatedMnemonicPhrase;
+      document.getElementById("generated-mnemonic-area").style.display = "block";
+      setStatus("create-new-status", "", "default");
+    } catch (e) {
+      console.error("generateNewMnemonic error:", e);
+      setStatus("create-new-status", e.message || "生成に失敗しました。", "error");
+    }
+  });
+
+  document.getElementById("create-new-next-btn")?.addEventListener("click", async () => {
+    if (!generatedMnemonicPhrase) return;
+
+    const recorded = confirm("記録しましたか？");
+    if (!recorded) return;
+
+    const networkChoice = document.getElementById("create-new-network-select").value;
+    const networkType = networkChoice === "testnet" ? NetworkType.TESTNET : NetworkType.MAINNET;
+
+    setStatus("create-new-status", "作成中...");
+    try {
+      await loginWithMnemonic(generatedMnemonicPhrase, networkType);
+      generatedMnemonicPhrase = null;
+      document.getElementById("generated-mnemonic-display").textContent = "";
+      document.getElementById("generated-mnemonic-area").style.display = "none";
+      setStatus("create-new-status", "", "default");
+      goHome();
+    } catch (e) {
+      console.error("loginWithMnemonic (create-new) error:", e);
+      setStatus("create-new-status", e.message || "作成に失敗しました。", "error");
+      alert(e.message || "ノードに接続できません");
     }
   });
 
@@ -552,6 +610,59 @@ window.addEventListener("load", async () => {
   });
 
   document.getElementById("apply-fee-btn")?.addEventListener("click", applyFeeSettings);
+
+  // ============================
+  // ネットワーク切り替え
+  // ============================
+  document.getElementById("menu-network-settings")?.addEventListener("click", () => {
+    const current = document.getElementById("network-settings-current");
+    if (current) {
+      current.textContent = appState.networkType === NetworkType.TESTNET ? "Testnet" : "Mainnet";
+    }
+    setStatus("network-settings-status", "", "default");
+    showPage(networkSettingsPage);
+  });
+
+  document.getElementById("back-settings-network")?.addEventListener("click", () => showPage(settingsPage));
+
+  async function handleSwitchNetwork(targetNetworkType) {
+    setStatus("network-settings-status", "切り替え中...");
+    try {
+      const ok = await switchNetwork(targetNetworkType);
+      if (!ok) {
+        alert("ネットワーク切り替えができません");
+        setStatus("network-settings-status", "", "default");
+        return;
+      }
+      const current = document.getElementById("network-settings-current");
+      if (current) {
+        current.textContent = targetNetworkType === NetworkType.TESTNET ? "Testnet" : "Mainnet";
+      }
+      setStatus("network-settings-status", "✅ 切り替えました。", "success");
+      goHome();
+    } catch (e) {
+      console.error("switchNetwork error:", e);
+      alert("ネットワーク切り替えができません");
+      setStatus("network-settings-status", "", "default");
+    }
+  }
+
+  document.getElementById("switch-to-mainnet-btn")?.addEventListener("click", () => handleSwitchNetwork(NetworkType.MAINNET));
+  document.getElementById("switch-to-testnet-btn")?.addEventListener("click", () => handleSwitchNetwork(NetworkType.TESTNET));
+
+  // ============================
+  // ログイン画面に戻る(データは削除しない)
+  // ============================
+  document.getElementById("back-to-login-btn")?.addEventListener("click", () => {
+    if (!confirm("ログイン画面に戻ります。保存されたアカウント情報は削除されません。よろしいですか？")) return;
+    returnToLoginScreen();
+    const mode = getVaultMode();
+    if (mode === "encrypted") {
+      showPage(unlockPage);
+    } else {
+      showPage(welcomePage);
+    }
+  });
 
   document.getElementById("logout-btn")?.addEventListener("click", () => {
     if (!confirm("ログアウトします。次回は再度ニーモニックの入力が必要になります。よろしいですか？")) return;
