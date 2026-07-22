@@ -29,6 +29,9 @@
       </p>
 
       <div class="settings-menu">
+        <button id="choose-create-new" class="settings-menu-item">
+          ✨ 新規作成
+        </button>
         <button id="choose-mnemonic" class="settings-menu-item">
           📝 ニーモニックをインポートする
         </button>
@@ -60,6 +63,40 @@
 
       <button id="import-mnemonic-btn" class="button-primary">インポートする</button>
       <div id="mnemonic-import-status"></div>
+    </div>
+  </div>
+
+  <!-- ============================================================
+       新規作成画面
+  ============================================================ -->
+  <div id="create-new-page" class="page">
+    <div class="card">
+      <h2>新規作成</h2>
+      <button id="back-welcome-create-new" class="button-primary">← 戻る</button>
+
+      <p style="font-size:13px;color:#94a3b8;">
+        新しいニーモニックフレーズを生成します。ネットワークを選んで「ニーモニックを生成する」を押してください。
+      </p>
+
+      <p><b>ネットワーク：</b></p>
+      <select id="create-new-network-select" class="input-box">
+        <option value="mainnet">Mainnet</option>
+        <option value="testnet">Testnet</option>
+      </select>
+
+      <button id="generate-mnemonic-btn" class="button-primary">ニーモニックを生成する</button>
+
+      <div id="generated-mnemonic-area" style="display:none;">
+        <p style="font-size:13px;color:#f97316;margin-top:16px;">
+          ⚠️ 以下のニーモニックは、このアプリの外(紙や別の安全な場所)に必ず記録してください。
+          このフレーズが分かれば誰でも資産にアクセスできます。画面を閉じると二度と表示されません。
+        </p>
+        <div id="generated-mnemonic-display" class="address-text" style="user-select:text;"></div>
+
+        <button id="create-new-next-btn" class="button-primary">次へ進む</button>
+      </div>
+
+      <div id="create-new-status"></div>
     </div>
   </div>
 
@@ -275,16 +312,42 @@
         <button id="menu-fee-settings" class="settings-menu-item">
           送金手数料の設定
         </button>
+        <button id="menu-network-settings" class="settings-menu-item">
+          🌐 ネットワークを切り替える
+        </button>
         <button id="menu-add-mnemonic" class="settings-menu-item">
           📝 ニーモニックでアカウント追加
         </button>
         <button id="menu-add-privatekey" class="settings-menu-item">
           🔑 秘密鍵でアカウント追加
         </button>
+        <button id="back-to-login-btn" class="settings-menu-item">
+          🔒 ログイン画面に戻る
+        </button>
         <button id="logout-btn" class="settings-menu-item">
           🚪 ログアウト
         </button>
       </div>
+    </div>
+  </div>
+
+  <!-- ============================================================
+       ネットワーク切り替え画面
+  ============================================================ -->
+  <div id="network-settings-page" class="page">
+    <div class="card">
+      <h2>ネットワークを切り替える</h2>
+      <button id="back-settings-network" class="button-primary">← 戻る</button>
+
+      <p style="font-size:13px;color:#94a3b8;">
+        現在のネットワーク：<span id="network-settings-current">---</span><br>
+        HTTPS対応ノードが見つからないネットワークには切り替えられません。
+      </p>
+
+      <button id="switch-to-mainnet-btn" class="button-primary">Mainnetに切り替える</button>
+      <button id="switch-to-testnet-btn" class="button-primary">Testnetに切り替える</button>
+
+      <div id="network-settings-status"></div>
     </div>
   </div>
 
