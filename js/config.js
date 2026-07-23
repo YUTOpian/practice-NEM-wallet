@@ -37,13 +37,13 @@ export const MAINNET_SEED_NODES = [
   "https://eisa.kasanetalk.net:7891",
 ];
 
-// ⚠️ テストネットは執筆時点で https://nemnodes.org/nodes_testnet 上に
-// HTTPS対応ノードの一覧を確認できませんでした。テストネットで検証したい場合は、
-// ① 上記サイトで最新のテストネットノードを確認しhttps対応か調べる、
-// ② 自分でテストネットノードを stunnel 等でHTTPS化する、
-// ③ 同梱の proxy-worker.js でHTTPS化する、のいずれかが必要です。
-// (「設定 → 接続先ノードの変更」で見つけたノードのURLを直接指定できます)
+// テストネットのHTTPS対応ノード(動作確認済み)。
+// 生死は流動的なので、繋がらなくなった場合は
+// https://nemnodes.org/nodes_testnet で最新のノードを確認するか、
+// 「設定 → 接続先ノードの変更」からHTTPS対応ノードを手動指定してください。
 export const TESTNET_SEED_NODES = [
+  "https://ntn1.dusanjp.com:7891",
+  "https://ntn2.dusanjp.com:7891",
 ];
 
 // ============================================================
