@@ -1,0 +1,848 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>NEM Simple Wallet</title>
+  <link rel="stylesheet" href="css/base.css?v=3" />
+  <link rel="stylesheet" href="css/wallet.css?v=3" />
+</head>
+<body>
+
+<header>
+  <h2>NEM Simple Wallet</h2>
+  <div class="header-info">
+    <p><span id="node-info">---</span></p>
+  </div>
+</header>
+
+<div class="container">
+
+  <!-- ============================================================
+       ログイン方法選択画面
+  ============================================================ -->
+  <div id="welcome-page" class="page active">
+    <div class="card">
+      <h2>ようこそ</h2>
+      <p style="font-size:13px;color:#94a3b8;">
+        ログイン方法を選んでください。
+      </p>
+
+      <div class="settings-menu">
+        <button id="choose-create-new" class="settings-menu-item">
+          ✨ 新規作成
+        </button>
+        <button id="choose-mnemonic" class="settings-menu-item">
+          📝 ニーモニックをインポートする
+        </button>
+      </div>
+
+      <hr>
+
+      <p style="font-size:13px;color:#94a3b8;">
+        オフライン環境で署名済みのトランザクションファイルをお持ちの場合は、
+        ログインせずにそのままブロードキャストできます(秘密鍵は不要です)。
+      </p>
+      <button id="welcome-load-offline-tx-btn" class="settings-menu-item">
+        📤 署名済みトランザクションを読み込む
+      </button>
+      <input id="welcome-offline-tx-file" type="file" accept="application/json,.json" style="display:none;">
+
+      <div id="welcome-status"></div>
+    </div>
+  </div>
+
+  <!-- ============================================================
+       ニーモニックインポート画面
+  ============================================================ -->
+  <div id="mnemonic-import-page" class="page">
+    <div class="card">
+      <h2>ニーモニックのインポート</h2>
+      <button id="back-welcome-mnemonic" class="button-primary">← 戻る</button>
+
+      <p style="font-size:13px;color:#94a3b8;">
+        12語または24語のニーモニックフレーズを入力してください。この端末以外には送信されません。
+      </p>
+
+      <textarea id="mnemonic-input" class="input-box" placeholder="単語をスペース区切りで入力"></textarea>
+
+      <p><b>ネットワーク：</b></p>
+      <select id="mnemonic-network-select" class="input-box">
+        <option value="mainnet">Mainnet</option>
+        <option value="testnet">Testnet</option>
+      </select>
+
+      <button id="import-mnemonic-btn" class="button-primary">インポートする</button>
+      <div id="mnemonic-import-status"></div>
+    </div>
+  </div>
+
+  <!-- ============================================================
+       新規作成画面
+  ============================================================ -->
+  <div id="create-new-page" class="page">
+    <div class="card">
+      <h2>新規作成</h2>
+      <button id="back-welcome-create-new" class="button-primary">← 戻る</button>
+
+      <p style="font-size:13px;color:#94a3b8;">
+        新しいニーモニックフレーズを生成します。ネットワークを選んで「ニーモニックを生成する」を押してください。
+      </p>
+
+      <p><b>ネットワーク：</b></p>
+      <select id="create-new-network-select" class="input-box">
+        <option value="mainnet">Mainnet</option>
+        <option value="testnet">Testnet</option>
+      </select>
+
+      <button id="generate-mnemonic-btn" class="button-primary">ニーモニックを生成する</button>
+
+      <div id="generated-mnemonic-area" style="display:none;">
+        <p style="font-size:13px;color:#f97316;margin-top:16px;">
+          ⚠️ 以下のニーモニックは、このアプリの外(紙や別の安全な場所)に必ず記録してください。
+          このフレーズが分かれば誰でも資産にアクセスできます。画面を閉じると二度と表示されません。
+        </p>
+        <div id="generated-mnemonic-display" class="address-text" style="user-select:text;"></div>
+
+        <button id="create-new-next-btn" class="button-primary">次へ進む</button>
+      </div>
+
+      <div id="create-new-status"></div>
+    </div>
+  </div>
+
+  <!-- ============================================================
+       パスワード設定画面(任意・インポート直後に表示)
+  ============================================================ -->
+  <div id="password-setup-page" class="page">
+    <div class="card">
+      <h2>パスワードの設定</h2>
+      <p style="font-size:13px;color:#94a3b8;">
+        このアプリではパスワードの設定が必須です。設定したパスワードで暗号化してこの端末に保存され、
+        次回以降はこのパスワードを入力してログインします。ページのリロードや再起動時も、
+        必ずこのパスワードの入力が必要になります（忘れるとニーモニックからの再インポートが必要です）。
+      </p>
+
+      <input id="setup-password-input" class="input-box" type="password" placeholder="パスワード（8文字以上）">
+      <input id="setup-password-confirm" class="input-box" type="password" placeholder="パスワード（確認）">
+
+      <button id="save-password-btn" class="button-primary">パスワードを設定して保存する</button>
+      <div id="password-setup-status"></div>
+    </div>
+  </div>
+
+  <!-- ============================================================
+       ロック解除画面(保存済みアカウントがある場合)
+  ============================================================ -->
+  <div id="unlock-page" class="page">
+    <div class="card">
+      <h2>ログイン</h2>
+      <p style="font-size:13px;color:#94a3b8;">
+        以前このアプリでパスワードを設定してアカウントを保存しています。そのパスワードを入力してください。
+      </p>
+
+      <input id="unlock-password-input" class="input-box" type="password" placeholder="パスワード">
+      <button id="unlock-btn" class="button-primary">ログイン</button>
+      <div id="unlock-status"></div>
+
+      <hr>
+
+      <p style="font-size:13px;color:#94a3b8;">
+        パスワードを設定した覚えがない、または忘れてしまった場合は、この端末に保存されたデータを削除して
+        ニーモニックの入力からやり直せます（ニーモニックさえ分かっていれば、資産がなくなることはありません）。
+      </p>
+      <button id="forget-account-btn" class="button-primary">保存データを削除してやり直す</button>
+
+      <hr>
+
+      <p style="font-size:13px;color:#94a3b8;">
+        オフライン環境で署名済みのトランザクションファイルをお持ちの場合は、
+        ログインせずにそのままブロードキャストできます(秘密鍵は不要です)。
+      </p>
+      <button id="unlock-load-offline-tx-btn" class="button-primary">📤 署名済みトランザクションを読み込む</button>
+      <input id="unlock-offline-tx-file" type="file" accept="application/json,.json" style="display:none;">
+    </div>
+  </div>
+
+  <!-- ============================================================
+       オフライントランザクション: ブロードキャスト確認画面
+       (ログイン不要。署名済みJSONを読み込んでノードへ送るだけ)
+  ============================================================ -->
+  <div id="offline-tx-broadcast-page" class="page">
+    <div class="card">
+      <h2>署名済みトランザクションの確認</h2>
+      <button id="back-offline-broadcast" class="button-primary">← 戻る</button>
+
+      <p style="font-size:13px;color:#94a3b8;">
+        内容を確認してから「ブロードキャストする」を押してください。
+        このステップでは秘密鍵は一切使用しません(読み込んだ署名データをそのままノードへ送るだけです)。
+      </p>
+
+      <div id="offline-tx-details" class="harvest-history-item">読み込み中...</div>
+
+      <p><b>送信先ノード(自動選択)：</b></p>
+      <div id="offline-tx-node-display" class="address-text">---</div>
+
+      <button id="broadcast-offline-tx-btn" class="button-primary">ブロードキャストする</button>
+      <div id="offline-tx-broadcast-status"></div>
+    </div>
+  </div>
+
+  <!-- ============================================================
+       アカウント画面
+  ============================================================ -->
+  <div id="account-page" class="page">
+    <div class="card">
+    <div class="card-title-row">
+      <div class="title-with-switcher">
+        <h2>アカウント情報</h2>
+        <button id="account-switch-btn" class="chevron-btn" title="アカウント切替" style="display:none;">▼</button>
+      </div>
+      <button id="settings-btn" class="settings-gear-btn" title="設定" aria-label="設定">
+        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="3"></circle>
+          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+        </svg>
+      </button>
+    </div>
+
+      <p><b>アドレス：</b></p>
+      <div class="address-row">
+        <span id="account-address" class="address-text">---</span>
+      </div>
+      <button id="copy-address-btn" class="copy-btn">🗒️</button>
+
+      <p>
+        <b>残高：</b>
+        <span id="account-balance">---</span>
+      </p>
+
+      <div class="wallet-actions">
+        <button id="receive-btn" class="button-primary">受け取り</button>
+        <button id="send-btn" class="button-primary">送金</button>
+        <button id="harvest-btn" class="button-primary">ハーベスト</button>
+        <button id="advanced-btn" class="button-primary">高度機能</button>
+      </div>
+
+      <hr>
+
+      <!-- タブ -->
+      <div class="wallet-tabs">
+        <div id="tab-token" class="wallet-tab active">保有トークン</div>
+        <div id="tab-activity" class="wallet-tab">アクティビティ</div>
+      </div>
+
+      <!-- 保有トークン -->
+      <div id="token-content">
+        <div id="mosaic-list">読み込み中...</div>
+      </div>
+
+      <!-- アクティビティ -->
+      <div id="activity-content" style="display:none;">
+        <div id="tx-list">読み込み中...</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================================================
+       モザイク選択画面
+  ============================================================ -->
+  <div id="send-page" class="page">
+    <div class="card">
+      <h2>トークン選択</h2>
+      <button id="back-account" class="button-primary">← 戻る</button>
+      <p>送りたいトークンを選択してください</p>
+      <div id="send-mosaic-list"></div>
+    </div>
+  </div>
+
+  <!-- ============================================================
+       送金入力画面
+  ============================================================ -->
+  <div id="transfer-page" class="page">
+    <div class="card">
+      <h2>トークン送金</h2>
+      <button id="back-send" class="button-primary">← トークン選択へ戻る</button>
+
+      <p>
+        <b>送信トークン：</b>
+        <span id="selected-mosaic-name">未選択</span>
+      </p>
+      <p>
+        <b>保有数量：</b>
+        <span id="selected-mosaic-balance">---</span>
+      </p>
+
+      <input type="hidden" id="selected-mosaic-id">
+      <input id="tx-recipient" class="input-box" placeholder="宛先アドレス">
+      <input id="tx-amount" class="input-box" type="number" placeholder="数量">
+      <textarea id="tx-message" class="input-box" placeholder="メッセージ（任意）"></textarea>
+
+       <!-- <label class="switch">
+        <input type="checkbox" id="tx-encrypt">
+<span>メッセージを暗号化する</span>
+      </label> 
+
+      <br> -->
+
+      <button id="btn-transfer" class="button-primary">送金する</button>
+      <div id="tx-status"></div>
+    </div>
+  </div>
+
+  <!-- ============================================================
+       受取画面
+  ============================================================ -->
+  <div id="receive-page" class="page">
+    <div class="card">
+      <h2>受け取り</h2>
+      <button id="back-account-receive" class="button-primary">← 戻る</button>
+      <div id="receive-qrcode"></div>
+      <p id="receive-address" class="address-text"></p>
+      <button id="copy-receive-address" class="button-primary">アドレスをコピー</button>
+    </div>
+  </div>
+
+  <!-- ============================================================
+       ハーベスト画面
+  ============================================================ -->
+  <div id="harvest-page" class="page">
+    <div class="card">
+      <h2>ハーベスト設定</h2>
+      <button id="back-account-harvest" class="button-primary">← 戻る</button>
+
+      <p>アカウント:</p>
+      <div id="harvest-address">---</div>
+      <div>
+        重要度：<span id="harvest-importance">---</span>
+      </div>
+
+      <div id="harvest-badge" class="harvest-badge">状態確認中...</div>
+
+      <hr>
+
+      <h3>委任先ノード</h3>
+      <p style="font-size:13px;color:#94a3b8;">
+        委任ハーベスティングを受け付けているノードを選ぶか、URLを直接入力してください。
+        （下の候補一覧は単にオンラインなノード一覧で、委任ハーベストを受け付けているとは限りません）
+      </p>
+      <select id="harvest-node-select" class="input-box">
+        <option value="">-- 候補を読み込み中... --</option>
+      </select>
+      <input id="harvest-node-input" class="input-box" placeholder="または直接ノードURLを入力 (HTTPS対応ノードのみ, 例: https://xxx.xxx.jp:7891)">
+
+      <hr>
+
+      <h3>設定</h3>
+      <button id="start-harvest-btn" class="button-primary">開始</button>
+      <button id="stop-harvest-btn" class="button-primary">停止</button>
+      <div id="harvest-status">状態確認中...</div>
+    </div>
+  </div>
+
+  <!-- ============================================================
+       設定メニュー画面
+  ============================================================ -->
+  <div id="settings-page" class="page">
+    <div class="card">
+      <h2>設定</h2>
+      <button id="back-account-settings" class="button-primary">← 戻る</button>
+
+      <div class="settings-menu">
+        <button id="menu-node-settings" class="settings-menu-item">
+          接続先ノードの変更
+        </button>
+        <button id="menu-network-settings" class="settings-menu-item">
+          🌐 ネットワークを切り替える
+        </button>
+        <button id="menu-add-mnemonic" class="settings-menu-item">
+          📝 ニーモニックでアカウント追加
+        </button>
+        <button id="menu-add-privatekey" class="settings-menu-item">
+          🔑 秘密鍵でアカウント追加
+        </button>
+        <button id="back-to-login-btn" class="settings-menu-item">
+          🔒 ログイン画面に戻る
+        </button>
+        <button id="logout-btn" class="settings-menu-item">
+          🚪 ログアウト
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================================================
+       ネットワーク切り替え画面
+  ============================================================ -->
+  <div id="network-settings-page" class="page">
+    <div class="card">
+      <h2>ネットワークを切り替える</h2>
+      <button id="back-settings-network" class="button-primary">← 戻る</button>
+
+      <p style="font-size:13px;color:#94a3b8;">
+        現在のネットワーク：<span id="network-settings-current">---</span><br>
+        HTTPS対応ノードが見つからないネットワークには切り替えられません。
+      </p>
+
+      <button id="switch-to-mainnet-btn" class="button-primary">Mainnetに切り替える</button>
+      <button id="switch-to-testnet-btn" class="button-primary">Testnetに切り替える</button>
+
+      <div id="network-settings-status"></div>
+    </div>
+  </div>
+
+  <!-- ============================================================
+       接続先ノードの変更画面
+  ============================================================ -->
+  <div id="node-settings-page" class="page">
+    <div class="card">
+      <h2>接続先ノードの変更</h2>
+      <button id="back-settings-node" class="button-primary">← 戻る</button>
+
+      <p><b>現在のノード：</b></p>
+      <div id="current-node-display" class="address-text">---</div>
+
+      <p style="font-size:13px;color:#94a3b8;">
+        ⚠️ このアプリはHTTPS対応ノードにのみ接続できます(http://のノードは指定できません)。
+        HTTPS対応ノードは <a href="https://nemnodes.org/nodes" target="_blank" rel="noopener" style="color:#8ab4f8;">nemnodes.org</a>
+        の一覧で「https」リンクが載っているものを参考にしてください。
+      </p>
+
+      <hr>
+
+      <h3>ノード候補</h3>
+      <select id="node-settings-select" class="input-box">
+        <option value="">-- 候補を読み込み中... --</option>
+      </select>
+      <input id="node-settings-input" class="input-box" placeholder="または直接ノードURLを入力 (例: https://xxx.xxx.jp:7891)">
+
+      <button id="apply-node-btn" class="button-primary">このノードに接続する</button>
+      <div id="node-settings-status"></div>
+    </div>
+  </div>
+
+  <!-- ============================================================
+       アカウント切替画面
+  ============================================================ -->
+  <div id="account-switcher-page" class="page">
+    <div class="card">
+      <h2>アカウント切替</h2>
+      <button id="back-account-switcher" class="button-primary">← 戻る</button>
+
+      <div id="account-switcher-list"></div>
+
+      <hr>
+
+      <button id="add-account-btn" class="button-primary">＋ アカウントを追加</button>
+      <button id="manage-hidden-accounts-btn" class="button-primary">非表示のアカウントを管理</button>
+    </div>
+  </div>
+
+  <!-- ============================================================
+       非表示アカウント管理画面
+  ============================================================ -->
+  <div id="hidden-accounts-page" class="page">
+    <div class="card">
+      <h2>非表示のアカウント</h2>
+      <button id="back-hidden-accounts" class="button-primary">← 戻る</button>
+
+      <div id="hidden-account-list"></div>
+    </div>
+  </div>
+
+  <!-- ============================================================
+       アカウント追加方法選択画面
+  ============================================================ -->
+  <div id="add-account-menu-page" class="page">
+    <div class="card">
+      <h2>アカウントの追加</h2>
+      <button id="back-add-account-menu" class="button-primary">← 戻る</button>
+
+      <div class="settings-menu">
+        <button id="add-account-mnemonic-choice" class="settings-menu-item">
+          📝 ニーモニックで追加
+        </button>
+        <button id="add-account-privatekey-choice" class="settings-menu-item">
+          🔑 秘密鍵で追加
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================================================
+       ニーモニックでアカウント追加
+  ============================================================ -->
+  <div id="add-account-mnemonic-page" class="page">
+    <div class="card">
+      <h2>ニーモニックでアカウント追加</h2>
+      <button id="back-add-account-mnemonic" class="button-primary">← 戻る</button>
+
+      <textarea id="add-mnemonic-input" class="input-box" placeholder="単語をスペース区切りで入力"></textarea>
+
+      <p><b>アカウントインデックス：</b></p>
+      <input id="add-mnemonic-index" class="input-box" type="number" min="0" value="0">
+      <p style="font-size:13px;color:#94a3b8;">
+        同じニーモニックでも番号を変えると別のアカウントになります。未使用の番号が自動で入力されています。
+      </p>
+
+      <input id="add-mnemonic-label" class="input-box" placeholder="ラベル（任意）">
+
+      <button id="add-mnemonic-submit" class="button-primary">追加する</button>
+      <div id="add-mnemonic-status"></div>
+    </div>
+  </div>
+
+  <!-- ============================================================
+       秘密鍵でアカウント追加
+  ============================================================ -->
+  <div id="add-account-privatekey-page" class="page">
+    <div class="card">
+      <h2>秘密鍵でアカウント追加</h2>
+      <button id="back-add-account-privatekey" class="button-primary">← 戻る</button>
+
+      <input id="add-privatekey-input" class="input-box" placeholder="秘密鍵（64桁の16進数）">
+      <input id="add-privatekey-label" class="input-box" placeholder="ラベル（任意）">
+
+      <button id="add-privatekey-submit" class="button-primary">追加する</button>
+      <div id="add-privatekey-status"></div>
+    </div>
+  </div>
+
+  <!-- ============================================================
+       高度機能メニュー
+  ============================================================ -->
+  <div id="advanced-page" class="page">
+    <div class="card">
+      <h2>高度機能</h2>
+      <button id="back-account-advanced" class="button-primary">← 戻る</button>
+
+      <div class="settings-menu">
+        <button id="menu-namespace" class="settings-menu-item">
+          🏷️ ネームスペースの登録
+        </button>
+        <button id="menu-mosaic" class="settings-menu-item">
+          🪙 モザイクの作成
+        </button>
+        <button id="menu-multisig" class="settings-menu-item">
+          👥 マルチシグ
+        </button>
+        <button id="menu-supernode" class="settings-menu-item">
+          🖥️ スーパーノード構築設定
+        </button>
+        <button id="menu-offline-tx" class="settings-menu-item">
+          🔒 オフライントランザクション
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================================================
+       オフライントランザクション: 署名(オフライン環境用)
+  ============================================================ -->
+  <div id="offline-tx-page" class="page">
+    <div class="card">
+      <h2>オフライントランザクション</h2>
+      <button id="back-advanced-offline-tx" class="button-primary">← 戻る</button>
+
+      <p style="font-size:13px;color:#94a3b8;">
+        秘密鍵をオンライン環境に一切渡さずに送金するための機能です。<br><br>
+        <b>使い方：</b><br>
+        ① インターネットから切り離した端末(オフライン環境)でこのアプリを開き、
+        ニーモニックでログインした状態でこの画面を開く<br>
+        ② 下のフォームに送金内容を入力し「署名してファイルを書き出す」を押す
+        (この操作はネットワーク通信を一切行わず、ローカルで署名するだけです)<br>
+        ③ 書き出されたJSONファイルを、USBメモリ等でオンライン環境の端末に移す<br>
+        ④「ようこそ画面」または「ログイン画面」にある
+        「📤 署名済みトランザクションを読み込む」からそのファイルを読み込み、
+        ブロードキャストする(オンライン環境ではログイン・秘密鍵は一切不要です)
+      </p>
+
+      <hr>
+
+      <h3>① 送金内容の作成・署名</h3>
+
+      <p><b>宛先アドレス：</b></p>
+      <input id="offline-tx-recipient" class="input-box" placeholder="宛先アドレス">
+
+      <p><b>送金額（XEM）：</b></p>
+      <input id="offline-tx-amount" class="input-box" type="number" min="0" step="any" value="0">
+
+      <p><b>メッセージ（任意）：</b></p>
+      <input id="offline-tx-message" class="input-box" placeholder="メッセージ">
+
+      <button id="create-offline-tx-btn" class="button-primary">署名してファイルを書き出す</button>
+      <div id="offline-tx-create-status"></div>
+
+      <hr>
+
+      <h3>参考：JSON形式</h3>
+      <p style="font-size:13px;color:#94a3b8;">
+        書き出されるファイルは <code>KASANE_OFFLINE_TX</code> 形式のJSONです
+        (type / version / chain / network / transactionType / payload / signature / signerPublicKey / hash)。
+      </p>
+
+      <p style="font-size:13px;color:#94a3b8;">
+        ファイルを選択（このページは新規に署名するための画面のため、既に署名済みのファイルは読み込めません）：
+      </p>
+      <input id="offline-tx-guard-file" type="file" accept="application/json,.json" class="input-box">
+    </div>
+  </div>
+
+  <!-- ============================================================
+       スーパーノード構築設定
+  ============================================================ -->
+  <div id="supernode-page" class="page">
+    <div class="card">
+      <h2>スーパーノード構築設定</h2>
+      <button id="back-advanced-supernode" class="button-primary">← 戻る</button>
+
+      <p style="font-size:13px;color:#94a3b8;">
+        NEMスーパーノード・プログラムは、高性能なノードを24時間365日稼働させて
+        ネットワークを支える見返りにXEM報酬を得られる仕組みです。<br><br>
+        ⚠️ <b>このウォレットが自動で行えるのは「④エントリー(登録)トランザクションの送信」のみです。</b>
+        ①〜③(サーバーの用意、NISノード・Node Servantソフトの設置、ポート開放)は、
+        別途ご自身のサーバー上で行っていただく必要があります(ブラウザ上では完結しません)。
+        詳しい手順は
+        <a href="https://docs.nem.io/pages/Guides/supernode-program/docs.en.html" target="_blank" rel="noopener" style="color:#8ab4f8;">
+          公式ガイド(docs.nem.io)
+        </a>
+        を参照してください。
+      </p>
+
+      <hr>
+
+      <h3>① 参加条件の確認</h3>
+      <div id="supernode-requirements">読み込み中...</div>
+
+      <hr>
+
+      <h3>② ノード・Servantの設置(ご自身のサーバーで)</h3>
+      <p style="font-size:13px;color:#94a3b8;">
+        委任ハーベスティング用の秘密鍵(delegated private key)をNISノードの設定に使います。
+        まだ委任ハーベスティングを設定していない場合は、先にホーム画面の「ハーベスト」から設定してください
+        (このアプリでは委任ハーベストの秘密鍵は生成時に一度だけコンソールに表示されます)。
+        NISノードとNode Servantの設置・ポート開放(7890, 7880, 7778)はご自身のサーバーで行ってください。
+      </p>
+
+      <hr>
+
+      <h3>③ エントリー(登録)トランザクションの送信</h3>
+      <p style="font-size:13px;color:#94a3b8;">
+        エントリー用アドレスは毎月変わり、NEM公式のTwitter/Discordで告知されます。
+        最新のアドレスを確認してから入力してください。
+      </p>
+
+      <p><b>ノードホスト(/node/info のhostと一致させてください)：</b></p>
+      <input id="supernode-node-host" class="input-box" placeholder="例: my-supernode.example.com">
+
+      <p><b>今月のエントリー用アドレス：</b></p>
+      <input id="supernode-enroll-address" class="input-box" placeholder="NEM公式Twitter/Discordで告知されたアドレス">
+
+      <p><b>コードワードハッシュ：</b></p>
+      <div style="display:flex;gap:8px;align-items:center;">
+        <input id="supernode-codeword" class="input-box" placeholder="「取得する」を押すか、手動で入力">
+        <button id="fetch-codeword-btn" class="button-primary" style="margin-top:0;white-space:nowrap;">取得する</button>
+      </div>
+      <div id="supernode-codeword-status"></div>
+
+      <button id="submit-enroll-btn" class="button-primary">エントリーする</button>
+      <div id="supernode-enroll-status"></div>
+    </div>
+  </div>
+
+  <!-- ============================================================
+       ネームスペース登録
+  ============================================================ -->
+  <div id="namespace-page" class="page">
+    <div class="card">
+      <h2>ネームスペースの登録</h2>
+      <button id="back-advanced-namespace" class="button-primary">← 戻る</button>
+
+      <h3>ルートネームスペースを作成</h3>
+      <p style="font-size:13px;color:#94a3b8;">
+        NEMのネームスペースは有効期間を指定できません(ネットワーク規定の期間で取得され、レンタル料がXEMで徴収されます)。
+      </p>
+      <input id="root-namespace-name" class="input-box" placeholder="ネームスペース名 (例: my_namespace)">
+      <button id="register-root-namespace-btn" class="button-primary">ルートネームスペースを登録</button>
+      <div id="root-namespace-status"></div>
+
+      <hr>
+
+      <h3>子ネームスペースを作成</h3>
+      <p style="font-size:13px;color:#94a3b8;">親は自分が保有するネームスペースから選択してください。</p>
+      <select id="child-namespace-parent-select" class="input-box">
+        <option value="">-- 読み込み中... --</option>
+      </select>
+      <input id="child-namespace-name" class="input-box" placeholder="子ネームスペース名">
+      <button id="register-child-namespace-btn" class="button-primary">子ネームスペースを登録</button>
+      <div id="child-namespace-status"></div>
+
+      <hr>
+
+      <h3>保有ネームスペース一覧</h3>
+      <div id="namespace-list">読み込み中...</div>
+    </div>
+  </div>
+
+  <!-- ============================================================
+       モザイク作成
+  ============================================================ -->
+  <div id="mosaic-page" class="page">
+    <div class="card">
+      <h2>モザイクの作成</h2>
+      <button id="back-advanced-mosaic" class="button-primary">← 戻る</button>
+
+      <h3>新規モザイク作成</h3>
+
+      <p style="font-size:13px;color:#94a3b8;">
+        NEMのモザイクは、必ず自分が保有するネームスペースの下に作成されます
+        (namespace:mosaicName の形。後から別のネームスペースへ付け替えることはできません)。
+      </p>
+
+      <p><b>作成先ネームスペース：</b></p>
+      <select id="mosaic-link-namespace-select" class="input-box">
+        <option value="">-- 読み込み中... --</option>
+      </select>
+
+      <p><b>モザイク名：</b></p>
+      <input id="mosaic-name-input" class="input-box" placeholder="例: coupon">
+
+      <p><b>説明文：</b></p>
+      <input id="mosaic-description-input" class="input-box" placeholder="例: my mosaic" maxlength="128">
+
+      <p><b>可分性 (divisibility)：</b></p>
+      <input id="mosaic-divisibility" class="input-box" type="number" min="0" max="6" value="0">
+
+      <p><b>初期供給量：</b></p>
+      <input id="mosaic-initial-supply" class="input-box" type="number" min="0" value="1000">
+
+      <label class="encrypt-option">
+        <input type="checkbox" id="mosaic-transferable" checked>
+        <span>第三者へ譲渡可能(transferable)</span>
+      </label>
+      <label class="encrypt-option">
+        <input type="checkbox" id="mosaic-supply-mutable">
+        <span>供給量変更可能(supplyMutable)</span>
+      </label>
+
+      <button id="create-mosaic-btn" class="button-primary">モザイクを作成する</button>
+      <div id="mosaic-create-status"></div>
+
+      <hr>
+
+      <h3>保有モザイク一覧</h3>
+      <div id="owned-mosaic-list">読み込み中...</div>
+    </div>
+  </div>
+
+  <!-- ============================================================
+       マルチシグメニュー
+  ============================================================ -->
+  <div id="multisig-menu-page" class="page">
+    <div class="card">
+      <h2>マルチシグ</h2>
+      <button id="back-advanced-multisig-menu" class="button-primary">← 戻る</button>
+
+      <div class="settings-menu">
+        <button id="menu-multisig-send" class="settings-menu-item">
+          💸 マルチシグ送金
+        </button>
+        <button id="menu-multisig-sign" class="settings-menu-item">
+          ✍️ マルチシグ署名
+        </button>
+        <button id="menu-multisig-settings" class="settings-menu-item">
+          ⚙️ マルチシグ設定
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================================================
+       マルチシグ設定
+  ============================================================ -->
+  <div id="multisig-settings-page" class="page">
+    <div class="card">
+      <h2>マルチシグ設定</h2>
+      <button id="back-multisig-menu-settings" class="button-primary">← 戻る</button>
+
+      <p style="font-size:13px;color:#94a3b8;">
+        設定対象は、今ログイン中のアカウント自身です。NEMのマルチシグ設定変更は
+        Symbolと異なり、他の連署者の事前同意は不要で、送信すると即座に反映されます
+        （追加する連署者は「アドレス」ではなく「公開鍵」で指定する必要がある点にご注意ください）。
+      </p>
+
+      <h3>現在の状態</h3>
+      <div id="multisig-info">読み込み中...</div>
+
+      <hr>
+
+      <h3>変更内容</h3>
+
+      <p><b>追加する連署者の公開鍵（1行に1つ）：</b></p>
+      <textarea id="multisig-add-addresses" class="input-box" placeholder="64桁の16進数公開鍵"></textarea>
+
+      <p><b>削除する連署者の公開鍵（1行に1つ）：</b></p>
+      <textarea id="multisig-remove-addresses" class="input-box" placeholder="64桁の16進数公開鍵"></textarea>
+
+      <p><b>最小承認者数の増減（minApprovalDelta）：</b></p>
+      <input id="multisig-min-approval-delta" class="input-box" type="number" value="0">
+
+      <button id="submit-multisig-settings-btn" class="button-primary">この内容で提案する</button>
+      <div id="multisig-settings-status"></div>
+    </div>
+  </div>
+
+  <!-- ============================================================
+       マルチシグ送金
+  ============================================================ -->
+  <div id="multisig-send-page" class="page">
+    <div class="card">
+      <h2>マルチシグ送金</h2>
+      <button id="back-multisig-menu-send" class="button-primary">← 戻る</button>
+
+      <p style="font-size:13px;color:#94a3b8;">
+        自分が連署者になっているマルチシグアカウントから送金を提案します
+        （必要な承認数に応じて、他の連署者が「マルチシグ署名」から承認するまで確定しません）。
+      </p>
+
+      <p><b>送金元マルチシグアカウント：</b></p>
+      <select id="multisig-send-from-select" class="input-box">
+        <option value="">-- 読み込み中... --</option>
+      </select>
+
+      <p><b>宛先アドレス：</b></p>
+      <input id="multisig-send-recipient" class="input-box" placeholder="宛先アドレス">
+
+      <p><b>送金額（XEM）：</b></p>
+      <input id="multisig-send-amount" class="input-box" type="number" min="0" step="any" value="0">
+
+      <p><b>メッセージ（任意）：</b></p>
+      <textarea id="multisig-send-message" class="input-box" placeholder="メッセージ"></textarea>
+
+      <button id="submit-multisig-send-btn" class="button-primary">この内容で提案する</button>
+      <div id="multisig-send-status"></div>
+    </div>
+  </div>
+
+  <!-- ============================================================
+       マルチシグ署名
+  ============================================================ -->
+  <div id="multisig-sign-page" class="page">
+    <div class="card">
+      <h2>マルチシグ署名</h2>
+      <button id="back-multisig-menu-sign" class="button-primary">← 戻る</button>
+
+      <p style="font-size:13px;color:#94a3b8;">
+        自分の連署が必要な、保留中のトランザクション一覧です。
+      </p>
+
+      <div id="multisig-pending-list">読み込み中...</div>
+    </div>
+  </div>
+
+</div>
+
+<script src="js/bundle.js?v=5"></script>
+
+</body>
+</html>
