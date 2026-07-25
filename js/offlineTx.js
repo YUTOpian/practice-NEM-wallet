@@ -29,7 +29,7 @@
 
 import { appState, NetworkType } from "./config.js";
 import { selectNode } from "./nodeSelector.js";
-import { normalizeAddress } from "./utils.js";
+import { normalizeAddress, hexToBytes } from "./utils.js";
 
 export const OFFLINE_TX_TYPE = "KASANE_OFFLINE_TX";
 export const OFFLINE_TX_VERSION = 1;
@@ -80,14 +80,25 @@ export async function createSignedOfflineTx({ recipientAddress, amountXem, messa
     60 * 60
   );
 
-  // 署名のみ(アナウンスはしない)
-  // ⚠️ facade.signTransaction()は動作検証の結果、tx.serialize()に対する
-  // 正しい署名を生成しないことが確認できたため、KeyPair.sign()を直接使う
+  // 署名
+  // ⚠️ facade.signTransaction()は動作検証の結果、attachSignature()が実際に
+  // 使う"data"バイト列に対する正しい署名を生成しないことが判明したため、
+  // 「①仮署名でattachSignature()を呼びdataを取得→②そのdataに対して
+  //  localKeyPair.sign()で署名し直す」という方式に切り替えている
   // (詳細はauth.jsのbuildNemAnnouncePayloadのコメント参照)
-  const signature = appState.localKeyPair.sign(tx.serialize());
-  const jsonPayload = appState.facade.transactionFactory.static.attachSignature(tx, signature);
+  const probeSignature = appState.localKeyPair.sign(tx.serialize());
+  const probePayload = JSON.parse(
+    appState.facade.transactionFactory.static.attachSignature(tx, probeSignature)
+  );
+  if (!probePayload.data) {
+    throw new Error("attachSignatureの出力にdataフィールドがありません");
+  }
+
+  const dataBytes = hexToBytes(probePayload.data);
+  const signature = appState.localKeyPair.sign(dataBytes);
   const signatureBytes = signature.bytes ?? signature;
   const signatureHex = appState.sdkCore.utils.uint8ToHex(signatureBytes);
+  const jsonPayload = JSON.stringify({ data: probePayload.data, signature: signatureHex });
   const hash = appState.facade.hashTransaction(tx).toString();
 
   return {
