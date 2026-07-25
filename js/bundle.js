@@ -1437,7 +1437,36 @@ async function unlockVault(password) {
         動作確認済みの localKeyPair.sign() で署名し直す
      ③ その "data" と ②の署名を組み合わせて最終ペイロードとする
 ============================================================ */
-function buildNemAnnouncePayload(tx) {
+/* ============================================================
+   nem-sdk (NEM専用の実績あるライブラリ) の遅延読み込み
+   ⚠️ 経緯(重要): 実機検証の結果、symbol-sdk v3 の NemFacade.signTransaction()
+   および KeyPair.sign() は、自己検証(同じSDK内でのsign→verify)こそ
+   成功するものの、実際のNIS1ネットワークには "FAILURE_SIGNATURE_NOT_VERIFIABLE"
+   として一貫して拒否されることが判明した。NEMは歴史的に「KECCAK_REVERSED_KEY」
+   という独自の署名方式(NIS1)を使っており、symbol-sdkの内部実装がこれを
+   正しく再現できていない可能性が高い(symbol-sdkは元々Symbol/Catapult用に
+   SHA-512ベースへ移行した経緯があるため)。
+   そのため、署名処理だけは実績のあるNEM専用ライブラリ nem-sdk に切り替える。
+   トランザクションの構造自体(recipient/amount/message/fee等)は
+   symbol-sdkで組み立てたもの(実機で構造は正しいと確認済み)をそのまま使い、
+   「dataバイト列に対する署名」の計算だけをnem-sdkに任せる。
+============================================================ */
+let _nemSdkPromise = null;
+function loadNemSdk() {
+  if (!_nemSdkPromise) {
+    _nemSdkPromise = import("https://esm.sh/nem-sdk@1.6.11").then((m) => m.default || m);
+  }
+  return _nemSdkPromise;
+}
+
+/* ============================================================
+   ローカル署名 (NIS1向け)
+   ① symbol-sdkの attachSignature() で、正しい構造の "data" を取得する
+      (dataの中身は署名の"値"には依存しないため、ここで使う署名は暫定的なものでよい)
+   ② その "data" に対して、nem-sdkで正しく署名し直す
+   ③ 正しい "data" と、nem-sdkによる正しい署名を組み合わせて最終ペイロードとする
+============================================================ */
+async function buildNemAnnouncePayload(tx) {
   // ① 仮署名でattachSignature()を呼び、正しい"data"を取得する
   const probeSignature = appState.localKeyPair.sign(tx.serialize());
   const probePayload = JSON.parse(
@@ -1448,29 +1477,36 @@ function buildNemAnnouncePayload(tx) {
     throw new Error("attachSignatureの出力にdataフィールドがありません(SDKの仕様が想定と異なる可能性があります)");
   }
 
-  // ② 実際の"data"バイト列に対して署名し直す
-  const dataBytes = hexToBytes(probePayload.data);
-  const signature = appState.localKeyPair.sign(dataBytes);
+  // ② nem-sdkで署名し直す
+  const nem = await loadNemSdk();
+  const nemKeyPair = nem.crypto.keyPair.create(appState.localPrivateKeyHex);
 
   // ------------------------------------------------------------
   // 診断ログ(送金には影響しない)
+  // symbol-sdkとnem-sdkで導出される公開鍵が一致するかを確認しておく
+  // (もし食い違う場合、アドレス導出の方式自体に差異がある可能性がある)
   // ------------------------------------------------------------
   try {
-    const verifier = new appState.sdkNem.Verifier(appState.localKeyPair.publicKey);
-    console.log("[diagnostic] data(attachSignature由来)に対する自己検証:", verifier.verify(dataBytes, signature));
-    console.log("[diagnostic] tx.serialize()とdataが同じか:", appState.sdkCore.utils.uint8ToHex(tx.serialize()) === probePayload.data);
+    const nemPublicKeyHex = nemKeyPair.publicKey.toString().toUpperCase();
+    const symbolPublicKeyHex = (appState.currentPubKey || "").toUpperCase();
+    console.log("[diagnostic] nem-sdk公開鍵:", nemPublicKeyHex);
+    console.log("[diagnostic] symbol-sdk公開鍵:", symbolPublicKeyHex);
+    console.log("[diagnostic] 公開鍵が一致:", nemPublicKeyHex === symbolPublicKeyHex);
+    if (nemPublicKeyHex !== symbolPublicKeyHex) {
+      console.warn("[警告] nem-sdkとsymbol-sdkで導出された公開鍵が一致していません。");
+    }
   } catch (e) {
-    console.warn("[diagnostic] 自己検証を実行できませんでした:", e);
+    console.warn("[diagnostic] 公開鍵比較に失敗しました:", e);
   }
 
-  // ③ 正しい"data"と、それに対する正しい署名を組み合わせる
-  const signatureBytes = signature.bytes ?? signature;
-  const signatureHex = appState.sdkCore.utils.uint8ToHex(signatureBytes);
-  const jsonPayload = JSON.stringify({ data: probePayload.data, signature: signatureHex });
+  const signatureHex = nemKeyPair.sign(probePayload.data);
+  console.log("[diagnostic] nem-sdkによる署名:", signatureHex);
 
+  // ③ 正しい"data"と、nem-sdkによる正しい署名を組み合わせる
+  const jsonPayload = JSON.stringify({ data: probePayload.data, signature: signatureHex });
   console.log("[diagnostic] 最終announceペイロード:", jsonPayload);
 
-  return { jsonPayload, signature };
+  return { jsonPayload, signatureHex };
 }
 
 function encryptMessageLocally(recipientPubKeyHex, plainText) {
@@ -1485,7 +1521,7 @@ function encryptMessageLocally(recipientPubKeyHex, plainText) {
    トランザクションを送る全機能から共通で使う。
 ============================================================ */
 async function signAndAnnounceTx(tx) {
-  const { jsonPayload } = buildNemAnnouncePayload(tx);
+  const { jsonPayload } = await buildNemAnnouncePayload(tx);
 
   const res = await fetch(new URL("/transaction/announce", appState.NODE), {
     method: "POST",
@@ -1501,7 +1537,11 @@ async function signAndAnnounceTx(tx) {
     throw new Error(result.message ?? "アナウンス失敗");
   }
 
-  return appState.facade.hashTransaction(tx).toString();
+  // ハッシュはノードのレスポンスからそのまま取得する
+  // (facade.hashTransaction(tx)はsymbol-sdk側の署名を前提にしている可能性があり、
+  //  今回nem-sdkで署名した実際のトランザクションのハッシュと一致しない懸念があるため)
+  const hash = result.transactionHash?.data ?? result.transactionHash ?? null;
+  return hash || "(ハッシュ取得失敗、announce自体は成功しています)";
 }
 
 /* ============================================================
@@ -2121,7 +2161,7 @@ async function submitEnrollTransaction({ nodeHost, enrollAddress, codewordHash }
 //                             // announce用JSON文字列(そのままノードへPOSTできる完成形)
 //   "signature": "...",      // 署名のhex(参考情報。ブロードキャスト時には使わない)
 //   "signerPublicKey": "...",
-//   "hash": "..."
+//   "hash": null      // 作成時点では確定しない(ブロードキャスト後にノードの応答で確定する)
 // }
 
 const OFFLINE_TX_TYPE = "KASANE_OFFLINE_TX";
@@ -2174,11 +2214,11 @@ async function createSignedOfflineTx({ recipientAddress, amountXem, message }) {
   );
 
   // 署名
-  // ⚠️ facade.signTransaction()は動作検証の結果、attachSignature()が実際に
-  // 使う"data"バイト列に対する正しい署名を生成しないことが判明したため、
-  // 「①仮署名でattachSignature()を呼びdataを取得→②そのdataに対して
-  //  localKeyPair.sign()で署名し直す」という方式に切り替えている
-  // (詳細はauth.jsのbuildNemAnnouncePayloadのコメント参照)
+  // ⚠️ symbol-sdkのNemFacade側の署名(facade.signTransaction / KeyPair.sign)は
+  // 実機検証の結果、実際のNIS1ネットワークと非互換な署名を生成することが
+  // 判明したため、署名処理だけはNEM専用の実績あるライブラリ nem-sdk に切り替えている
+  // (詳細はauth.jsのbuildNemAnnouncePayloadのコメント参照)。
+  // symbol-sdkは正しい構造の"data"を得るためだけに使う。
   const probeSignature = appState.localKeyPair.sign(tx.serialize());
   const probePayload = JSON.parse(
     appState.facade.transactionFactory.static.attachSignature(tx, probeSignature)
@@ -2187,12 +2227,12 @@ async function createSignedOfflineTx({ recipientAddress, amountXem, message }) {
     throw new Error("attachSignatureの出力にdataフィールドがありません");
   }
 
-  const dataBytes = hexToBytes(probePayload.data);
-  const signature = appState.localKeyPair.sign(dataBytes);
-  const signatureBytes = signature.bytes ?? signature;
-  const signatureHex = appState.sdkCore.utils.uint8ToHex(signatureBytes);
+  const nem = await loadNemSdk();
+  const nemKeyPair = nem.crypto.keyPair.create(appState.localPrivateKeyHex);
+  const signatureHex = nemKeyPair.sign(probePayload.data);
+
   const jsonPayload = JSON.stringify({ data: probePayload.data, signature: signatureHex });
-  const hash = appState.facade.hashTransaction(tx).toString();
+  const hash = null; // ブロードキャスト時にノードのレスポンスから確定するため、ここでは確定させない
 
   return {
     type: OFFLINE_TX_TYPE,
@@ -2285,7 +2325,8 @@ async function broadcastOfflineTx(json, nodeUrl) {
     throw new Error(result.message ?? "アナウンスに失敗しました");
   }
 
-  return json.hash;
+  // ハッシュはノードのレスポンスから取得する(作成時点のjson.hashはnullのため)
+  return result.transactionHash?.data ?? result.transactionHash ?? json.hash ?? "(ハッシュ取得失敗、announce自体は成功しています)";
 }
 
 // ======================== multisig.js ========================
@@ -3457,7 +3498,7 @@ window.addEventListener("load", async () => {
       downloadOfflineTxJson(offlineTx);
       setStatus(
         "offline-tx-create-status",
-        `✅ 署名しました。ファイルを書き出しました。Hash: ${offlineTx.hash}`,
+        `✅ 署名しました。ファイルを書き出しました。(Hashはブロードキャスト時に確定します)`,
         "success"
       );
     } catch (e) {
@@ -3513,7 +3554,7 @@ window.addEventListener("load", async () => {
             <div>ネットワーク: ${json.network === "TEST_NET" ? "Testnet" : "Mainnet"}</div>
             <div>種別: ${json.transactionType}</div>
             <div>送信元公開鍵: ${json.signerPublicKey}</div>
-            <div>Hash: ${json.hash}</div>
+            <div>Hash: ${json.hash ?? "(ブロードキャスト後に確定します)"}</div>
           `;
         }
 

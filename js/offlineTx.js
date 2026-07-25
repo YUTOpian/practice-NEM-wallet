@@ -24,12 +24,13 @@
 //                             // announce用JSON文字列(そのままノードへPOSTできる完成形)
 //   "signature": "...",      // 署名のhex(参考情報。ブロードキャスト時には使わない)
 //   "signerPublicKey": "...",
-//   "hash": "..."
+//   "hash": null      // 作成時点では確定しない(ブロードキャスト後にノードの応答で確定する)
 // }
 
 import { appState, NetworkType } from "./config.js";
 import { selectNode } from "./nodeSelector.js";
-import { normalizeAddress, hexToBytes } from "./utils.js";
+import { normalizeAddress } from "./utils.js";
+import { loadNemSdk } from "./auth.js";
 
 export const OFFLINE_TX_TYPE = "KASANE_OFFLINE_TX";
 export const OFFLINE_TX_VERSION = 1;
@@ -81,11 +82,11 @@ export async function createSignedOfflineTx({ recipientAddress, amountXem, messa
   );
 
   // 署名
-  // ⚠️ facade.signTransaction()は動作検証の結果、attachSignature()が実際に
-  // 使う"data"バイト列に対する正しい署名を生成しないことが判明したため、
-  // 「①仮署名でattachSignature()を呼びdataを取得→②そのdataに対して
-  //  localKeyPair.sign()で署名し直す」という方式に切り替えている
-  // (詳細はauth.jsのbuildNemAnnouncePayloadのコメント参照)
+  // ⚠️ symbol-sdkのNemFacade側の署名(facade.signTransaction / KeyPair.sign)は
+  // 実機検証の結果、実際のNIS1ネットワークと非互換な署名を生成することが
+  // 判明したため、署名処理だけはNEM専用の実績あるライブラリ nem-sdk に切り替えている
+  // (詳細はauth.jsのbuildNemAnnouncePayloadのコメント参照)。
+  // symbol-sdkは正しい構造の"data"を得るためだけに使う。
   const probeSignature = appState.localKeyPair.sign(tx.serialize());
   const probePayload = JSON.parse(
     appState.facade.transactionFactory.static.attachSignature(tx, probeSignature)
@@ -94,12 +95,12 @@ export async function createSignedOfflineTx({ recipientAddress, amountXem, messa
     throw new Error("attachSignatureの出力にdataフィールドがありません");
   }
 
-  const dataBytes = hexToBytes(probePayload.data);
-  const signature = appState.localKeyPair.sign(dataBytes);
-  const signatureBytes = signature.bytes ?? signature;
-  const signatureHex = appState.sdkCore.utils.uint8ToHex(signatureBytes);
+  const nem = await loadNemSdk();
+  const nemKeyPair = nem.crypto.keyPair.create(appState.localPrivateKeyHex);
+  const signatureHex = nemKeyPair.sign(probePayload.data);
+
   const jsonPayload = JSON.stringify({ data: probePayload.data, signature: signatureHex });
-  const hash = appState.facade.hashTransaction(tx).toString();
+  const hash = null; // ブロードキャスト時にノードのレスポンスから確定するため、ここでは確定させない
 
   return {
     type: OFFLINE_TX_TYPE,
@@ -192,5 +193,6 @@ export async function broadcastOfflineTx(json, nodeUrl) {
     throw new Error(result.message ?? "アナウンスに失敗しました");
   }
 
-  return json.hash;
+  // ハッシュはノードのレスポンスから取得する(作成時点のjson.hashはnullのため)
+  return result.transactionHash?.data ?? result.transactionHash ?? json.hash ?? "(ハッシュ取得失敗、announce自体は成功しています)";
 }

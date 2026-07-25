@@ -436,7 +436,7 @@ window.addEventListener("load", async () => {
       downloadOfflineTxJson(offlineTx);
       setStatus(
         "offline-tx-create-status",
-        `✅ 署名しました。ファイルを書き出しました。Hash: ${offlineTx.hash}`,
+        `✅ 署名しました。ファイルを書き出しました。(Hashはブロードキャスト時に確定します)`,
         "success"
       );
     } catch (e) {
@@ -492,7 +492,7 @@ window.addEventListener("load", async () => {
             <div>ネットワーク: ${json.network === "TEST_NET" ? "Testnet" : "Mainnet"}</div>
             <div>種別: ${json.transactionType}</div>
             <div>送信元公開鍵: ${json.signerPublicKey}</div>
-            <div>Hash: ${json.hash}</div>
+            <div>Hash: ${json.hash ?? "(ブロードキャスト後に確定します)"}</div>
           `;
         }
 

@@ -417,7 +417,36 @@ export async function unlockVault(password) {
         動作確認済みの localKeyPair.sign() で署名し直す
      ③ その "data" と ②の署名を組み合わせて最終ペイロードとする
 ============================================================ */
-export function buildNemAnnouncePayload(tx) {
+/* ============================================================
+   nem-sdk (NEM専用の実績あるライブラリ) の遅延読み込み
+   ⚠️ 経緯(重要): 実機検証の結果、symbol-sdk v3 の NemFacade.signTransaction()
+   および KeyPair.sign() は、自己検証(同じSDK内でのsign→verify)こそ
+   成功するものの、実際のNIS1ネットワークには "FAILURE_SIGNATURE_NOT_VERIFIABLE"
+   として一貫して拒否されることが判明した。NEMは歴史的に「KECCAK_REVERSED_KEY」
+   という独自の署名方式(NIS1)を使っており、symbol-sdkの内部実装がこれを
+   正しく再現できていない可能性が高い(symbol-sdkは元々Symbol/Catapult用に
+   SHA-512ベースへ移行した経緯があるため)。
+   そのため、署名処理だけは実績のあるNEM専用ライブラリ nem-sdk に切り替える。
+   トランザクションの構造自体(recipient/amount/message/fee等)は
+   symbol-sdkで組み立てたもの(実機で構造は正しいと確認済み)をそのまま使い、
+   「dataバイト列に対する署名」の計算だけをnem-sdkに任せる。
+============================================================ */
+let _nemSdkPromise = null;
+export function loadNemSdk() {
+  if (!_nemSdkPromise) {
+    _nemSdkPromise = import("https://esm.sh/nem-sdk@1.6.11").then((m) => m.default || m);
+  }
+  return _nemSdkPromise;
+}
+
+/* ============================================================
+   ローカル署名 (NIS1向け)
+   ① symbol-sdkの attachSignature() で、正しい構造の "data" を取得する
+      (dataの中身は署名の"値"には依存しないため、ここで使う署名は暫定的なものでよい)
+   ② その "data" に対して、nem-sdkで正しく署名し直す
+   ③ 正しい "data" と、nem-sdkによる正しい署名を組み合わせて最終ペイロードとする
+============================================================ */
+export async function buildNemAnnouncePayload(tx) {
   // ① 仮署名でattachSignature()を呼び、正しい"data"を取得する
   const probeSignature = appState.localKeyPair.sign(tx.serialize());
   const probePayload = JSON.parse(
@@ -428,29 +457,36 @@ export function buildNemAnnouncePayload(tx) {
     throw new Error("attachSignatureの出力にdataフィールドがありません(SDKの仕様が想定と異なる可能性があります)");
   }
 
-  // ② 実際の"data"バイト列に対して署名し直す
-  const dataBytes = hexToBytes(probePayload.data);
-  const signature = appState.localKeyPair.sign(dataBytes);
+  // ② nem-sdkで署名し直す
+  const nem = await loadNemSdk();
+  const nemKeyPair = nem.crypto.keyPair.create(appState.localPrivateKeyHex);
 
   // ------------------------------------------------------------
   // 診断ログ(送金には影響しない)
+  // symbol-sdkとnem-sdkで導出される公開鍵が一致するかを確認しておく
+  // (もし食い違う場合、アドレス導出の方式自体に差異がある可能性がある)
   // ------------------------------------------------------------
   try {
-    const verifier = new appState.sdkNem.Verifier(appState.localKeyPair.publicKey);
-    console.log("[diagnostic] data(attachSignature由来)に対する自己検証:", verifier.verify(dataBytes, signature));
-    console.log("[diagnostic] tx.serialize()とdataが同じか:", appState.sdkCore.utils.uint8ToHex(tx.serialize()) === probePayload.data);
+    const nemPublicKeyHex = nemKeyPair.publicKey.toString().toUpperCase();
+    const symbolPublicKeyHex = (appState.currentPubKey || "").toUpperCase();
+    console.log("[diagnostic] nem-sdk公開鍵:", nemPublicKeyHex);
+    console.log("[diagnostic] symbol-sdk公開鍵:", symbolPublicKeyHex);
+    console.log("[diagnostic] 公開鍵が一致:", nemPublicKeyHex === symbolPublicKeyHex);
+    if (nemPublicKeyHex !== symbolPublicKeyHex) {
+      console.warn("[警告] nem-sdkとsymbol-sdkで導出された公開鍵が一致していません。");
+    }
   } catch (e) {
-    console.warn("[diagnostic] 自己検証を実行できませんでした:", e);
+    console.warn("[diagnostic] 公開鍵比較に失敗しました:", e);
   }
 
-  // ③ 正しい"data"と、それに対する正しい署名を組み合わせる
-  const signatureBytes = signature.bytes ?? signature;
-  const signatureHex = appState.sdkCore.utils.uint8ToHex(signatureBytes);
-  const jsonPayload = JSON.stringify({ data: probePayload.data, signature: signatureHex });
+  const signatureHex = nemKeyPair.sign(probePayload.data);
+  console.log("[diagnostic] nem-sdkによる署名:", signatureHex);
 
+  // ③ 正しい"data"と、nem-sdkによる正しい署名を組み合わせる
+  const jsonPayload = JSON.stringify({ data: probePayload.data, signature: signatureHex });
   console.log("[diagnostic] 最終announceペイロード:", jsonPayload);
 
-  return { jsonPayload, signature };
+  return { jsonPayload, signatureHex };
 }
 
 export function encryptMessageLocally(recipientPubKeyHex, plainText) {
@@ -465,7 +501,7 @@ export function encryptMessageLocally(recipientPubKeyHex, plainText) {
    トランザクションを送る全機能から共通で使う。
 ============================================================ */
 export async function signAndAnnounceTx(tx) {
-  const { jsonPayload } = buildNemAnnouncePayload(tx);
+  const { jsonPayload } = await buildNemAnnouncePayload(tx);
 
   const res = await fetch(new URL("/transaction/announce", appState.NODE), {
     method: "POST",
@@ -481,7 +517,11 @@ export async function signAndAnnounceTx(tx) {
     throw new Error(result.message ?? "アナウンス失敗");
   }
 
-  return appState.facade.hashTransaction(tx).toString();
+  // ハッシュはノードのレスポンスからそのまま取得する
+  // (facade.hashTransaction(tx)はsymbol-sdk側の署名を前提にしている可能性があり、
+  //  今回nem-sdkで署名した実際のトランザクションのハッシュと一致しない懸念があるため)
+  const hash = result.transactionHash?.data ?? result.transactionHash ?? null;
+  return hash || "(ハッシュ取得失敗、announce自体は成功しています)";
 }
 
 /* ============================================================
