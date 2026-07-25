@@ -1499,8 +1499,8 @@ async function buildNemAnnouncePayload(tx) {
     console.warn("[diagnostic] 公開鍵比較に失敗しました:", e);
   }
 
-  const signatureHex = nemKeyPair.sign(probePayload.data);
-  console.log("[diagnostic] nem-sdkによる署名:", signatureHex);
+  const signatureHex = nemKeyPair.sign(probePayload.data).toString();
+  console.log("[diagnostic] nem-sdkによる署名(hex文字列):", signatureHex, "型:", typeof signatureHex, "長さ:", signatureHex.length);
 
   // ③ 正しい"data"と、nem-sdkによる正しい署名を組み合わせる
   const jsonPayload = JSON.stringify({ data: probePayload.data, signature: signatureHex });
@@ -2229,7 +2229,7 @@ async function createSignedOfflineTx({ recipientAddress, amountXem, message }) {
 
   const nem = await loadNemSdk();
   const nemKeyPair = nem.crypto.keyPair.create(appState.localPrivateKeyHex);
-  const signatureHex = nemKeyPair.sign(probePayload.data);
+  const signatureHex = nemKeyPair.sign(probePayload.data).toString();
 
   const jsonPayload = JSON.stringify({ data: probePayload.data, signature: signatureHex });
   const hash = null; // ブロードキャスト時にノードのレスポンスから確定するため、ここでは確定させない

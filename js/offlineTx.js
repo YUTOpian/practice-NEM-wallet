@@ -97,7 +97,7 @@ export async function createSignedOfflineTx({ recipientAddress, amountXem, messa
 
   const nem = await loadNemSdk();
   const nemKeyPair = nem.crypto.keyPair.create(appState.localPrivateKeyHex);
-  const signatureHex = nemKeyPair.sign(probePayload.data);
+  const signatureHex = nemKeyPair.sign(probePayload.data).toString();
 
   const jsonPayload = JSON.stringify({ data: probePayload.data, signature: signatureHex });
   const hash = null; // ブロードキャスト時にノードのレスポンスから確定するため、ここでは確定させない
