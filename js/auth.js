@@ -419,22 +419,87 @@ export async function unlockVault(password) {
 ============================================================ */
 /* ============================================================
    nem-sdk (NEM専用の実績あるライブラリ) の遅延読み込み
-   ⚠️ 経緯(重要): 実機検証の結果、symbol-sdk v3 の NemFacade.signTransaction()
-   および KeyPair.sign() は、自己検証(同じSDK内でのsign→verify)こそ
-   成功するものの、実際のNIS1ネットワークには "FAILURE_SIGNATURE_NOT_VERIFIABLE"
-   として一貫して拒否されることが判明した。NEMは歴史的に「KECCAK_REVERSED_KEY」
-   という独自の署名方式(NIS1)を使っており、symbol-sdkの内部実装がこれを
-   正しく再現できていない可能性が高い(symbol-sdkは元々Symbol/Catapult用に
-   SHA-512ベースへ移行した経緯があるため)。
-   そのため、署名処理だけは実績のあるNEM専用ライブラリ nem-sdk に切り替える。
-   トランザクションの構造自体(recipient/amount/message/fee等)は
-   symbol-sdkで組み立てたもの(実機で構造は正しいと確認済み)をそのまま使い、
-   「dataバイト列に対する署名」の計算だけをnem-sdkに任せる。
+
+   ⚠️ 経緯(重要・2段階で判明):
+   段階1: symbol-sdk v3 の NemFacade.signTransaction() / KeyPair.sign() は、
+     自己検証(同じSDK内でのsign→verify)こそ成功するものの、
+     実際のNIS1ネットワークには "FAILURE_SIGNATURE_NOT_VERIFIABLE" として
+     一貫して拒否された。→ NEM専用の実績あるライブラリ nem-sdk に切替を試みた。
+
+   段階2: ところが esm.sh 経由で読み込んだ nem-sdk も、NEM公式ドキュメントに
+     載っている「秘密鍵→公開鍵→署名」の既知の正解データ(テストベクタ)で
+     検証したところ、公開鍵の導出結果が正解と一致しないことが判明した
+     (verifySignature()自体は正しく動くのに、keyPair.create()の
+      秘密鍵→公開鍵の変換だけがおかしい)。
+     esm.shがCommonJS形式のnem-sdkをESM変換する際に、内部で使っている
+     Keccakハッシュ実装が正しく読み込めていないと考えられる。
+
+   → 対策として、esm.shのimport()を使わず、nem-sdk公式サイトが案内している
+     方法(<script>タグでUMDバンドルを直接読み込み、グローバルのrequire()で
+     取得する)に切り替えた。読み込み直後に、NEM公式ドキュメント記載の
+     既知の正解データを使った自己テストを必ず実行し、一致しない場合は
+     ここでエラーにして「壊れたまま署名してしまう」ことを防いでいる。
 ============================================================ */
+const NEM_SDK_SCRIPT_URL = "https://cdn.jsdelivr.net/npm/nem-sdk@1.6.11/dist/nem-sdk.js";
+
+// NEM公式ドキュメント記載の既知の正解データ(自己テスト用)
+// https://docs.nem.io/pages/Developers/nem-sdk/06.private-key/docs.en.html
+const NEM_SDK_TEST_VECTOR = {
+  privateKey: "aaaaaaaaaaeeeeeeeeeebbbbbbbbbb5555555555dddddddddd1111111111aaee",
+  expectedPublicKey: "0257b05f601ff829fdff84956fb5e3c65470a62375a1cc285779edd5ca3b42f6",
+  expectedSignature:
+    "392511e5b1d78e0991d4cb2a10037cc8be775e56d76b8157a4da726ccb44042e9b419084c09128ffe2a78fe78e2a19beb0e2f57e14b66c962187e61457bd9e09",
+  data: "NEM is awesome !",
+};
+
+function selfTestNemSdk(nem) {
+  const keyPair = nem.crypto.keyPair.create(NEM_SDK_TEST_VECTOR.privateKey);
+  const publicKey = keyPair.publicKey.toString();
+  const publicKeyOk = publicKey === NEM_SDK_TEST_VECTOR.expectedPublicKey;
+
+  const verifyOk = nem.crypto.verifySignature(
+    NEM_SDK_TEST_VECTOR.expectedPublicKey,
+    NEM_SDK_TEST_VECTOR.data,
+    NEM_SDK_TEST_VECTOR.expectedSignature
+  );
+
+  console.log("[nem-sdk自己テスト] 公開鍵導出:", publicKeyOk ? "OK" : `NG(得られた値: ${publicKey})`);
+  console.log("[nem-sdk自己テスト] 既知の署名の検証:", verifyOk ? "OK" : "NG");
+
+  if (!publicKeyOk || !verifyOk) {
+    throw new Error(
+      "nem-sdkの自己テストに失敗しました(既知の正解データと一致しません)。" +
+      "読み込んだnem-sdkが壊れている可能性があるため、安全のため署名処理を中止しました。"
+    );
+  }
+}
+
 let _nemSdkPromise = null;
 export function loadNemSdk() {
   if (!_nemSdkPromise) {
-    _nemSdkPromise = import("https://esm.sh/nem-sdk@1.6.11").then((m) => m.default || m);
+    _nemSdkPromise = new Promise((resolve, reject) => {
+      // 既に読み込み済みならそのまま使う
+      if (window.__nemSdkModule__) {
+        resolve(window.__nemSdkModule__);
+        return;
+      }
+
+      const script = document.createElement("script");
+      script.src = NEM_SDK_SCRIPT_URL;
+      script.onload = () => {
+        try {
+          // nem-sdkのUMDバンドルは、グローバルのrequire()経由で取得する仕様
+          const nemModule = window.require("nem-sdk").default;
+          selfTestNemSdk(nemModule);
+          window.__nemSdkModule__ = nemModule;
+          resolve(nemModule);
+        } catch (e) {
+          reject(e);
+        }
+      };
+      script.onerror = () => reject(new Error("nem-sdkの読み込みに失敗しました(ネットワークを確認してください)"));
+      document.head.appendChild(script);
+    });
   }
   return _nemSdkPromise;
 }
@@ -462,21 +527,35 @@ export async function buildNemAnnouncePayload(tx) {
   const nemKeyPair = nem.crypto.keyPair.create(appState.localPrivateKeyHex);
 
   // ------------------------------------------------------------
-  // 診断ログ(送金には影響しない)
-  // symbol-sdkとnem-sdkで導出される公開鍵が一致するかを確認しておく
-  // (もし食い違う場合、アドレス導出の方式自体に差異がある可能性がある)
+  // ⚠️ 重要な安全確認(送金には影響するため、ここは診断ログではなく必須チェック)
+  // symbol-sdkとnem-sdkで導出される公開鍵・アドレスが一致するかを確認する。
+  // これまでの調査で「symbol-sdk側の鍵導出方式がNEM本来の方式(Keccak)と
+  // 異なっている可能性がある」ことが分かっているため、もし食い違う場合は
+  // このウォレットで表示してきたアドレスが実際のNIS1アドレスと違う可能性がある。
+  // 誤ったアドレスとして送金してしまう事故を防ぐため、食い違う場合は送金を中止する。
   // ------------------------------------------------------------
+  const nemPublicKeyHex = nemKeyPair.publicKey.toString().toUpperCase();
+  const symbolPublicKeyHex = (appState.currentPubKey || "").toUpperCase();
+  console.log("[diagnostic] nem-sdk公開鍵:", nemPublicKeyHex);
+  console.log("[diagnostic] symbol-sdk公開鍵:", symbolPublicKeyHex);
+  console.log("[diagnostic] 公開鍵が一致:", nemPublicKeyHex === symbolPublicKeyHex);
+
   try {
-    const nemPublicKeyHex = nemKeyPair.publicKey.toString().toUpperCase();
-    const symbolPublicKeyHex = (appState.currentPubKey || "").toUpperCase();
-    console.log("[diagnostic] nem-sdk公開鍵:", nemPublicKeyHex);
-    console.log("[diagnostic] symbol-sdk公開鍵:", symbolPublicKeyHex);
-    console.log("[diagnostic] 公開鍵が一致:", nemPublicKeyHex === symbolPublicKeyHex);
-    if (nemPublicKeyHex !== symbolPublicKeyHex) {
-      console.warn("[警告] nem-sdkとsymbol-sdkで導出された公開鍵が一致していません。");
-    }
+    const isTestnet = appState.networkType === NetworkType.TESTNET;
+    const nemNetworkId = isTestnet ? -104 : 104; // nem-sdkの慣習: Testnetは-104
+    const nemAddress = nem.model.address.toAddress(nemPublicKeyHex, nemNetworkId);
+    console.log("[diagnostic] nem-sdkから導出したアドレス:", nemAddress);
+    console.log("[diagnostic] このウォレットが表示しているアドレス:", appState.currentAddress?.toString());
   } catch (e) {
-    console.warn("[diagnostic] 公開鍵比較に失敗しました:", e);
+    console.warn("[diagnostic] nem-sdkでのアドレス導出に失敗しました:", e);
+  }
+
+  if (nemPublicKeyHex !== symbolPublicKeyHex) {
+    throw new Error(
+      "安全のため送金を中止しました: nem-sdkとsymbol-sdkで導出された公開鍵が一致しません。" +
+      "このウォレットが表示しているアドレスが、実際のNIS1アドレスと異なる可能性があります。" +
+      "コンソールの[diagnostic]ログを確認し、送金を再開する前にご相談ください。"
+    );
   }
 
   const signatureHex = nemKeyPair.sign(probePayload.data).toString();
