@@ -1,32 +1,38 @@
 // index.js
 
-import { appState, NetworkType } from "./config.js";
+import { appState, NetworkType, getXymMosaicIdHex } from "./config.js";
 import { sendTx } from "./transfer.js";
 import { loadRecentTx, initLiveTx } from "./transactions.js";
 import { initWebSocket } from "./ws.js";
-import { showPopup } from "./utils.js";
+import { selectNode } from "./nodeSelector.js";
+import { showPopup, escapeHtml } from "./utils.js";
 import { setStatus } from "./ui.js";
 import { checkHarvestStatus, startHarvest, stopHarvest, loadHarvestNodeCandidates, loadHarvestHistory } from "./harvest.js";
 import {
   showCurrentNode,
   loadNodeSettingsCandidates,
   applyNodeChange,
+  loadFeeSettings,
+  selectFeeOption,
+  applyFeeSettings,
 } from "./settings.js";
 import {
+  connectWithSSS,
   loginWithMnemonic,
-  hasVault,
+  getVaultMode,
+  restorePlainVault,
   unlockVault,
   saveVault,
   clearVault,
   logout,
+  lockSession,
+  generateNewMnemonic,
   switchToAccount,
   setAccountHidden,
   addAccountFromMnemonic,
   addAccountFromPrivateKey,
   addNextAccountFromCurrentMnemonic,
   hasCurrentMnemonic,
-  generateNewMnemonic,
-  returnToLoginScreen,
   switchNetwork,
 } from "./auth.js";
 import {
@@ -39,26 +45,28 @@ import {
   loadOwnedNamespaces,
   populateParentNamespaceSelect,
   registerRootNamespace,
-  registerChildNamespace,
+  registerSubNamespace,
+  fetchOwnedNamespaceOptions,
+  setAddressAlias,
+  estimateRootNamespaceFee,
+  estimateSubNamespaceFee,
+  estimateAddressAliasFee,
+  estimateRootNamespaceRentalFee,
+  estimateSubNamespaceRentalFee,
 } from "./namespace.js";
 import {
   loadOwnedMosaicsWithAlias,
   populateMosaicNamespaceSelect,
   createMosaic,
+  setMosaicAlias,
+  fetchOwnedMosaicIds,
+  estimateMosaicCreationFee,
+  estimateMosaicAliasFee,
+  changeMosaicSupply,
+  fetchMosaicDetail,
+  estimateMosaicRentalFee,
 } from "./mosaic.js";
-import {
-  checkSupernodeRequirements,
-  fetchCodewordHash,
-  submitEnrollTransaction,
-} from "./supernode.js";
-import {
-  createSignedOfflineTx,
-  downloadOfflineTxJson,
-  guardAgainstSignedOfflineTx,
-  parseOfflineTxJson,
-  selectNodeForOfflineTx,
-  broadcastOfflineTx,
-} from "./offlineTx.js";
+import { setMetadata, loadOwnMetadataList } from "./metadata.js";
 import {
   loadMultisigInfo,
   fetchCosignatoryOfAddresses,
@@ -67,15 +75,45 @@ import {
   loadPendingPartialTransactions,
   cosignPending,
 } from "./multisig.js";
+import { parseCsv, sendMultiTransfer } from "./multisend.js";
+import { computeFileHash, createApostille, searchApostilleTransactions } from "./apostille.js";
+import {
+  loadAccountRestrictions,
+  setAddressRestriction,
+  setMosaicRestriction,
+  setOperationRestriction,
+  setMosaicGlobalRestriction,
+  setMosaicAddressRestriction,
+  OPERATION_TYPE_OPTIONS,
+  MOSAIC_RESTRICTION_TYPE_OPTIONS,
+} from "./restriction.js";
+import {
+  composeAndSignOfflineTransfer,
+  downloadOfflineTxJson,
+  validateOfflineTxJson,
+  broadcastOfflineTx,
+  checkAlreadyBroadcastStatus,
+} from "./offline.js";
+import {
+  createSponsorshipRequest,
+  downloadSponsorshipRequestJson,
+  parseSponsorshipRequestJson,
+  approveSponsorshipRequest,
+  buildCosignInfo,
+  downloadCosignInfoJson,
+  parseCosignInfoJson,
+} from "./feeDelegation.js";
 import QRCode from "https://esm.sh/qrcode";
+import { QRCodeGenerator } from "https://esm.sh/symbol-qr-library";
+import { firstValueFrom } from "https://esm.sh/rxjs";
 
 window.addEventListener("load", async () => {
   // ============================
   // ページ取得
   // ============================
   const welcomePage = document.getElementById("welcome-page");
-  const mnemonicImportPage = document.getElementById("mnemonic-import-page");
   const createNewPage = document.getElementById("create-new-page");
+  const mnemonicImportPage = document.getElementById("mnemonic-import-page");
   const passwordSetupPage = document.getElementById("password-setup-page");
   const unlockPage = document.getElementById("unlock-page");
   const accountPage = document.getElementById("account-page");
@@ -84,22 +122,42 @@ window.addEventListener("load", async () => {
   const receivePage = document.getElementById("receive-page");
   const harvestPage = document.getElementById("harvest-page");
   const settingsPage = document.getElementById("settings-page");
-  const networkSettingsPage = document.getElementById("network-settings-page");
   const nodeSettingsPage = document.getElementById("node-settings-page");
+  const feeSettingsPage = document.getElementById("fee-settings-page");
+  const networkSwitchPage = document.getElementById("network-switch-page");
   const accountSwitcherPage = document.getElementById("account-switcher-page");
   const hiddenAccountsPage = document.getElementById("hidden-accounts-page");
+  const addAccountMenuPage = document.getElementById("add-account-menu-page");
   const addAccountMnemonicPage = document.getElementById("add-account-mnemonic-page");
   const addAccountPrivatekeyPage = document.getElementById("add-account-privatekey-page");
   const advancedPage = document.getElementById("advanced-page");
   const namespacePage = document.getElementById("namespace-page");
   const mosaicPage = document.getElementById("mosaic-page");
-  const supernodePage = document.getElementById("supernode-page");
-  const offlineTxPage = document.getElementById("offline-tx-page");
-  const offlineTxBroadcastPage = document.getElementById("offline-tx-broadcast-page");
+  const metadataPage = document.getElementById("metadata-page");
   const multisigMenuPage = document.getElementById("multisig-menu-page");
   const multisigSettingsPage = document.getElementById("multisig-settings-page");
   const multisigSendPage = document.getElementById("multisig-send-page");
   const multisigSignPage = document.getElementById("multisig-sign-page");
+  const multisendMenuPage = document.getElementById("multisend-menu-page");
+  const multisendCsvPage = document.getElementById("multisend-csv-page");
+  const multisendListPage = document.getElementById("multisend-list-page");
+  const apostilleMenuPage = document.getElementById("apostille-menu-page");
+  const apostilleCreatePage = document.getElementById("apostille-create-page");
+  const apostilleVerifyPage = document.getElementById("apostille-verify-page");
+  const apostilleHistoryPage = document.getElementById("apostille-history-page");
+  const restrictionMenuPage = document.getElementById("restriction-menu-page");
+  const restrictionAddressPage = document.getElementById("restriction-address-page");
+  const restrictionMosaicPage = document.getElementById("restriction-mosaic-page");
+  const restrictionOperationPage = document.getElementById("restriction-operation-page");
+  const restrictionAccountMenuPage = document.getElementById("restriction-account-menu-page");
+  const restrictionMosaicMenuPage = document.getElementById("restriction-mosaic-menu-page");
+  const restrictionMosaicGlobalPage = document.getElementById("restriction-mosaic-global-page");
+  const restrictionMosaicAddressPage = document.getElementById("restriction-mosaic-address-page");
+  const offlineTxCreatePage = document.getElementById("offline-tx-create-page");
+  const offlineBroadcastPage = document.getElementById("offline-broadcast-page");
+  const feeDelegationMenuPage = document.getElementById("fee-delegation-menu-page");
+  const feeDelegationUserPage = document.getElementById("fee-delegation-user-page");
+  const feeDelegationOwnerPage = document.getElementById("fee-delegation-owner-page");
 
   // ============================
   // ページ切替
@@ -118,18 +176,86 @@ window.addEventListener("load", async () => {
 
   // ============================
   // 起動時の初期画面判定
-  // パスワード設定は必須のため、保存済みアカウントがあれば
-  // 必ずパスワード入力画面を表示する(自動ログインはしない)
+  // - パスワード設定済み(暗号化保存) → ロック解除画面
+  // - パスワード未設定だが保存あり(平文保存) → 確認なしでそのまま自動ログイン
+  // - 何も保存されていない → ログイン方法選択画面
   // ============================
-  if (hasVault()) {
+  const vaultMode = getVaultMode();
+  if (vaultMode === "encrypted") {
     showPage(unlockPage);
+  } else if (vaultMode === "plain") {
+    try {
+      await restorePlainVault();
+      goHome();
+    } catch (e) {
+      console.error("restorePlainVault error:", e);
+      showPage(welcomePage);
+    }
   } else {
     showPage(welcomePage);
   }
 
   // ============================
-  // ニーモニックインポート画面へ / 新規作成画面へ
-  // (ウェルカム画面はニーモニック関連の選択肢のみ。SSS Extensionは非対応)
+  // SSS Extensionと接続
+  // ============================
+  document.getElementById("choose-sss")?.addEventListener("click", async () => {
+    setStatus("welcome-status", "SSS Extensionに接続中...");
+    try {
+      await connectWithSSS();
+      goHome();
+    } catch (e) {
+      console.error("connectWithSSS error:", e);
+      setStatus("welcome-status", e.message || "SSS Extensionとの接続に失敗しました。", "error");
+    }
+  });
+
+  // ============================
+  // 新規作成
+  // ============================
+  document.getElementById("choose-create-new")?.addEventListener("click", async () => {
+    showPage(createNewPage);
+    setStatus("create-new-status", "", "default");
+    const mnemonicEl = document.getElementById("create-new-mnemonic");
+    mnemonicEl.textContent = "生成中...";
+    try {
+      const mnemonic = await generateNewMnemonic();
+      mnemonicEl.textContent = mnemonic;
+      mnemonicEl.dataset.mnemonic = mnemonic;
+    } catch (e) {
+      console.error("generateNewMnemonic error:", e);
+      mnemonicEl.textContent = "生成に失敗しました。";
+    }
+  });
+
+  document.getElementById("back-welcome-create-new")?.addEventListener("click", () => showPage(welcomePage));
+
+  document.getElementById("create-new-next-btn")?.addEventListener("click", async () => {
+    const mnemonicPhrase = document.getElementById("create-new-mnemonic").dataset.mnemonic;
+    const networkChoice = document.getElementById("create-new-network-select").value;
+    const networkType = networkChoice === "testnet" ? NetworkType.TESTNET : NetworkType.MAINNET;
+
+    if (!mnemonicPhrase) {
+      setStatus("create-new-status", "ニーモニックの生成が完了していません。", "error");
+      return;
+    }
+
+    if (!confirm("ニーモニックを記録しましたか？\n\n記録していない場合、このアカウントには二度とアクセスできなくなります。")) {
+      return;
+    }
+
+    setStatus("create-new-status", "作成中...");
+    try {
+      await loginWithMnemonic(mnemonicPhrase, networkType);
+      setStatus("create-new-status", "", "default");
+      showPage(passwordSetupPage);
+    } catch (e) {
+      console.error("loginWithMnemonic(create-new) error:", e);
+      setStatus("create-new-status", e.message || "作成に失敗しました。", "error");
+    }
+  });
+
+  // ============================
+  // ニーモニックインポート画面へ
   // ============================
   document.getElementById("choose-mnemonic")?.addEventListener("click", () => {
     showPage(mnemonicImportPage);
@@ -156,64 +282,13 @@ window.addEventListener("load", async () => {
     } catch (e) {
       console.error("loginWithMnemonic error:", e);
       setStatus("mnemonic-import-status", e.message || "インポートに失敗しました。", "error");
-      alert(e.message || "ノードに接続できません");
-    }
-  });
-
-  // ============================
-  // 新規作成画面
-  // ============================
-  let generatedMnemonicPhrase = null;
-
-  document.getElementById("choose-create-new")?.addEventListener("click", () => {
-    generatedMnemonicPhrase = null;
-    document.getElementById("generated-mnemonic-area").style.display = "none";
-    document.getElementById("generated-mnemonic-display").textContent = "";
-    setStatus("create-new-status", "", "default");
-    showPage(createNewPage);
-  });
-
-  document.getElementById("back-welcome-create-new")?.addEventListener("click", () => showPage(welcomePage));
-
-  document.getElementById("generate-mnemonic-btn")?.addEventListener("click", async () => {
-    setStatus("create-new-status", "生成中...");
-    try {
-      generatedMnemonicPhrase = await generateNewMnemonic();
-      document.getElementById("generated-mnemonic-display").textContent = generatedMnemonicPhrase;
-      document.getElementById("generated-mnemonic-area").style.display = "block";
-      setStatus("create-new-status", "", "default");
-    } catch (e) {
-      console.error("generateNewMnemonic error:", e);
-      setStatus("create-new-status", e.message || "生成に失敗しました。", "error");
-    }
-  });
-
-  document.getElementById("create-new-next-btn")?.addEventListener("click", async () => {
-    if (!generatedMnemonicPhrase) return;
-
-    const recorded = confirm("記録しましたか？");
-    if (!recorded) return;
-
-    const networkChoice = document.getElementById("create-new-network-select").value;
-    const networkType = networkChoice === "testnet" ? NetworkType.TESTNET : NetworkType.MAINNET;
-
-    setStatus("create-new-status", "作成中...");
-    try {
-      await loginWithMnemonic(generatedMnemonicPhrase, networkType);
-      generatedMnemonicPhrase = null;
-      document.getElementById("generated-mnemonic-display").textContent = "";
-      document.getElementById("generated-mnemonic-area").style.display = "none";
-      setStatus("create-new-status", "", "default");
-      showPage(passwordSetupPage);
-    } catch (e) {
-      console.error("loginWithMnemonic (create-new) error:", e);
-      setStatus("create-new-status", e.message || "作成に失敗しました。", "error");
-      alert(e.message || "ノードに接続できません");
     }
   });
 
   // ============================
   // パスワード設定(任意)
+  // この時点でアカウントは既にappState.accountsに追加済みなので、
+  // saveVaultはパスワードだけ受け取って現在のアカウント一覧を暗号化保存する
   // ============================
   document.getElementById("save-password-btn")?.addEventListener("click", async () => {
     const pw = document.getElementById("setup-password-input").value;
@@ -259,6 +334,17 @@ window.addEventListener("load", async () => {
     }
   });
 
+  document.getElementById("unlock-sss-btn")?.addEventListener("click", async () => {
+    setStatus("unlock-status", "SSS Extensionに接続中...");
+    try {
+      await connectWithSSS();
+      goHome();
+    } catch (e) {
+      console.error("connectWithSSS error:", e);
+      setStatus("unlock-status", e.message || "SSS Extensionとの接続に失敗しました。", "error");
+    }
+  });
+
   document.getElementById("forget-account-btn")?.addEventListener("click", () => {
     if (!confirm(
       "この端末に保存されているアカウント情報を削除します。\n" +
@@ -293,11 +379,18 @@ window.addEventListener("load", async () => {
     const item = e.target.closest(".mosaic-item");
     if (!item) return;
 
-    document.getElementById("selected-mosaic-name").textContent =
+    document.getElementById("selected-mosaic-name").textContent = 
       item.querySelector(".mosaic-name")?.textContent;
 
-    document.getElementById("selected-mosaic-id").value =
+    document.getElementById("selected-mosaic-id").value = 
       item.querySelector(".mosaic-id")?.textContent;
+
+    // ⚠️ #send-mosaic-list は account.js が生成したHTML(#mosaic-list)を
+    // innerHTMLでコピーしただけなので、item.onclickで設定されるはずの
+    // 残高(selected-mosaic-balance)がここまで反映されていなかった。
+    // 明示的にコピー先の .mosaic-amount から取得してセットする。
+    document.getElementById("selected-mosaic-balance").textContent = 
+      item.querySelector(".mosaic-amount")?.textContent ?? "---";
 
     cameFromMosaicList = false;
     if (backSendBtn) backSendBtn.textContent = "← トークン選択へ戻る";
@@ -311,6 +404,8 @@ window.addEventListener("load", async () => {
     const item = e.target.closest(".mosaic-item");
     if (!item) return;
 
+    // 選択情報(selected-mosaic-id / name / balance)は
+    // account.js 側の item.onclick で既にセット済み
     cameFromMosaicList = true;
     if (backSendBtn) backSendBtn.textContent = "← 戻る";
     showPage(transferPage);
@@ -332,14 +427,29 @@ window.addEventListener("load", async () => {
     const qr = document.getElementById("receive-qrcode");
     qr.innerHTML = "読み込み中...";
 
-    // NEM(NIS1)公式ウォレット向けのQR仕様はSymbolの symbol-qr-library とは異なるため、
-    // ここではシンプルにアドレス文字列そのもののQRコードを表示する。
     try {
-      const dataUrl = await QRCode.toDataURL(address, { width: 220, margin: 1 });
+      if (!appState.generationHash || !appState.networkType) {
+        throw new Error("ネットワーク情報が未取得です");
+      }
+
+      // 他のSymbolウォレット(公式モバイルウォレット等)が読み込める
+      // 形式(symbol-qr-library の AddressQR)でQRコードを生成する
+      const addressQR = QRCodeGenerator.createExportAddress(
+        "Symbol Simple Wallet",
+        address,
+        appState.networkType,
+        appState.generationHash
+      );
+
+      const dataUrl = await firstValueFrom(addressQR.toBase64());
       qr.innerHTML = `<img src="${dataUrl}" alt="QR Code">`;
     } catch (e) {
-      console.error("QRコード生成失敗", e);
-      qr.innerHTML = "QRコードの生成に失敗しました";
+      console.error("AddressQR生成失敗、通常QRにフォールバック", e);
+      const dataUrl = await QRCode.toDataURL(address, {
+        width: 220,
+        margin: 1
+      });
+      qr.innerHTML = `<img src="${dataUrl}" alt="QR Code">`;
     }
   });
 
@@ -364,6 +474,9 @@ window.addEventListener("load", async () => {
     await loadHarvestHistory();
   });
 
+  // ============================
+  // ハーベスト開始
+  // ============================
   document.getElementById("start-harvest-btn")?.addEventListener("click", startHarvest);
   document.getElementById("stop-harvest-btn")?.addEventListener("click", stopHarvest);
 
@@ -378,163 +491,94 @@ window.addEventListener("load", async () => {
     showPage(namespacePage);
     await loadOwnedNamespaces();
     await populateParentNamespaceSelect();
+    await populateNamespaceAliasSelects();
+    await populateNsLinkMosaicSelect();
   });
 
   document.getElementById("menu-mosaic")?.addEventListener("click", async () => {
     showPage(mosaicPage);
     await loadOwnedMosaicsWithAlias();
     await populateMosaicNamespaceSelect();
+    updateMosaicFeeEstimate();
   });
 
   // ============================
-  // スーパーノード構築設定
+  // メタデータ
   // ============================
-  document.getElementById("menu-supernode")?.addEventListener("click", () => {
-    showPage(supernodePage);
-    checkSupernodeRequirements();
-    setStatus("supernode-codeword-status", "", "default");
-    setStatus("supernode-enroll-status", "", "default");
+  document.getElementById("menu-metadata")?.addEventListener("click", async () => {
+    showPage(metadataPage);
+    await loadOwnMetadataList();
   });
 
-  document.getElementById("back-advanced-supernode")?.addEventListener("click", () => showPage(advancedPage));
+  const metadataTargetType = document.getElementById("metadata-target-type");
+  const metadataNamespaceRow = document.getElementById("metadata-target-namespace-row");
+  const metadataMosaicRow = document.getElementById("metadata-target-mosaic-row");
 
-  document.getElementById("fetch-codeword-btn")?.addEventListener("click", fetchCodewordHash);
+  async function refreshMetadataTargetRows() {
+    const type = metadataTargetType.value;
+    metadataNamespaceRow.style.display = type === "namespace" ? "block" : "none";
+    metadataMosaicRow.style.display = type === "mosaic" ? "block" : "none";
 
-  document.getElementById("submit-enroll-btn")?.addEventListener("click", async () => {
-    const nodeHost = document.getElementById("supernode-node-host").value.trim();
-    const enrollAddress = document.getElementById("supernode-enroll-address").value.trim();
-    const codewordHash = document.getElementById("supernode-codeword").value.trim();
-
-    setStatus("supernode-enroll-status", "送信中...");
-    try {
-      const hash = await submitEnrollTransaction({ nodeHost, enrollAddress, codewordHash });
-      setStatus("supernode-enroll-status", `✅ エントリーを送信しました。Hash: ${hash}`, "success");
-    } catch (e) {
-      console.error("submitEnrollTransaction error:", e);
-      setStatus("supernode-enroll-status", e.message || "送信に失敗しました。", "error");
-    }
-  });
-
-  // ============================
-  // オフライントランザクション(署名: 高度機能内。ログイン必須)
-  // ============================
-  document.getElementById("menu-offline-tx")?.addEventListener("click", () => {
-    showPage(offlineTxPage);
-    setStatus("offline-tx-create-status", "", "default");
-  });
-
-  document.getElementById("back-advanced-offline-tx")?.addEventListener("click", () => showPage(advancedPage));
-
-  document.getElementById("create-offline-tx-btn")?.addEventListener("click", async () => {
-    const recipientAddress = document.getElementById("offline-tx-recipient").value.trim();
-    const amountXem = document.getElementById("offline-tx-amount").value;
-    const message = document.getElementById("offline-tx-message").value;
-
-    setStatus("offline-tx-create-status", "署名中...(ネットワーク通信は行いません)");
-    try {
-      const offlineTx = await createSignedOfflineTx({ recipientAddress, amountXem, message });
-      downloadOfflineTxJson(offlineTx);
-      setStatus(
-        "offline-tx-create-status",
-        `✅ 署名しました。ファイルを書き出しました。(Hashはブロードキャスト時に確定します)`,
-        "success"
-      );
-    } catch (e) {
-      console.error("createSignedOfflineTx error:", e);
-      setStatus("offline-tx-create-status", e.message || "署名に失敗しました。", "error");
-    }
-  });
-
-  document.getElementById("offline-tx-guard-file")?.addEventListener("change", async (e) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    try {
-      const text = await file.text();
-      const json = JSON.parse(text);
-      guardAgainstSignedOfflineTx(json);
-    } catch (err) {
-      alert(err.message || "ファイルの読み込みに失敗しました。");
-    } finally {
-      e.target.value = "";
-    }
-  });
-
-  // ============================
-  // オフライントランザクション(ブロードキャスト: ようこそ/ログイン画面。ログイン不要)
-  // ============================
-  let offlineTxOriginPage = null;
-  let pendingOfflineTx = null;
-  let pendingOfflineTxNode = null;
-
-  function wireOfflineTxLoader(buttonId, fileInputId, originPage) {
-    const btn = document.getElementById(buttonId);
-    const fileInput = document.getElementById(fileInputId);
-    if (!btn || !fileInput) return;
-
-    btn.addEventListener("click", () => fileInput.click());
-
-    fileInput.addEventListener("change", async (e) => {
-      const file = e.target.files?.[0];
-      e.target.value = "";
-      if (!file) return;
-
+    if (type === "namespace") {
+      const select = document.getElementById("metadata-target-namespace-select");
+      select.innerHTML = `<option value="">-- 読み込み中... --</option>`;
       try {
-        const text = await file.text();
-        const json = parseOfflineTxJson(text);
-
-        offlineTxOriginPage = originPage;
-        pendingOfflineTx = json;
-
-        const detailsEl = document.getElementById("offline-tx-details");
-        if (detailsEl) {
-          detailsEl.innerHTML = `
-            <div>チェーン: ${json.chain}</div>
-            <div>ネットワーク: ${json.network === "TEST_NET" ? "Testnet" : "Mainnet"}</div>
-            <div>種別: ${json.transactionType}</div>
-            <div>送信元公開鍵: ${json.signerPublicKey}</div>
-            <div>Hash: ${json.hash ?? "(ブロードキャスト後に確定します)"}</div>
-          `;
-        }
-
-        const nodeDisplay = document.getElementById("offline-tx-node-display");
-        if (nodeDisplay) nodeDisplay.textContent = "ノードを検索中...";
-        setStatus("offline-tx-broadcast-status", "", "default");
-        showPage(offlineTxBroadcastPage);
-
-        pendingOfflineTxNode = await selectNodeForOfflineTx(json);
-        if (nodeDisplay) {
-          nodeDisplay.textContent = pendingOfflineTxNode || "(接続可能なHTTPS対応ノードが見つかりませんでした)";
-        }
-      } catch (err) {
-        console.error("offline tx load error:", err);
-        alert(err.message || "ファイルの読み込みに失敗しました。");
+        const options = await fetchOwnedNamespaceOptions();
+        select.innerHTML = options.length
+          ? options.map(ns => `<option value="${ns.id}">${ns.name}</option>`).join("")
+          : `<option value="">-- 保有ネームスペースがありません --</option>`;
+      } catch {
+        select.innerHTML = `<option value="">-- 取得に失敗しました --</option>`;
       }
-    });
+    } else if (type === "mosaic") {
+      const select = document.getElementById("metadata-target-mosaic-select");
+      select.innerHTML = `<option value="">-- 読み込み中... --</option>`;
+      try {
+        const ids = await fetchOwnedMosaicIds();
+        select.innerHTML = ids.length
+          ? ids.map(id => `<option value="${id}">${id}</option>`).join("")
+          : `<option value="">-- 作成したモザイクがありません --</option>`;
+      } catch {
+        select.innerHTML = `<option value="">-- 取得に失敗しました --</option>`;
+      }
+    }
   }
 
-  wireOfflineTxLoader("welcome-load-offline-tx-btn", "welcome-offline-tx-file", welcomePage);
-  wireOfflineTxLoader("unlock-load-offline-tx-btn", "unlock-offline-tx-file", unlockPage);
+  metadataTargetType?.addEventListener("change", refreshMetadataTargetRows);
 
-  document.getElementById("back-offline-broadcast")?.addEventListener("click", () => {
-    pendingOfflineTx = null;
-    pendingOfflineTxNode = null;
-    showPage(offlineTxOriginPage || welcomePage);
-  });
+  document.getElementById("submit-metadata-btn")?.addEventListener("click", async () => {
+    const type = metadataTargetType.value;
+    const key = document.getElementById("metadata-key-input").value.trim();
+    const value = document.getElementById("metadata-value-input").value;
 
-  document.getElementById("broadcast-offline-tx-btn")?.addEventListener("click", async () => {
-    if (!pendingOfflineTx) return;
-    if (!pendingOfflineTxNode) {
-      alert("ノードに接続できません");
+    if (!key) {
+      setStatus("metadata-status", "メタデータキーを入力してください。", "error");
       return;
     }
 
-    setStatus("offline-tx-broadcast-status", "送信中...");
+    let targetId = null;
+    if (type === "namespace") {
+      targetId = document.getElementById("metadata-target-namespace-select").value;
+      if (!targetId) {
+        setStatus("metadata-status", "対象のネームスペースを選択してください。", "error");
+        return;
+      }
+    } else if (type === "mosaic") {
+      targetId = document.getElementById("metadata-target-mosaic-select").value;
+      if (!targetId) {
+        setStatus("metadata-status", "対象のモザイクを選択してください。", "error");
+        return;
+      }
+    }
+
+    setStatus("metadata-status", "登録・更新中...");
     try {
-      const hash = await broadcastOfflineTx(pendingOfflineTx, pendingOfflineTxNode);
-      setStatus("offline-tx-broadcast-status", `✅ ブロードキャストしました。Hash: ${hash}`, "success");
+      const hash = await setMetadata(type, targetId, key, value);
+      setStatus("metadata-status", `✅ リクエストを送信しました。Hash: ${hash}`, "success");
+      await loadOwnMetadataList();
     } catch (e) {
-      console.error("broadcastOfflineTx error:", e);
-      setStatus("offline-tx-broadcast-status", e.message || "ブロードキャストに失敗しました。", "error");
+      console.error("setMetadata error:", e);
+      setStatus("metadata-status", e.message || "登録・更新に失敗しました。", "error");
     }
   });
 
@@ -578,32 +622,38 @@ window.addEventListener("load", async () => {
       .getElementById("multisig-remove-addresses").value
       .split("\n").map(s => s.trim()).filter(Boolean);
     const minApprovalDelta = parseInt(document.getElementById("multisig-min-approval-delta").value, 10) || 0;
+    const minRemovalDelta = parseInt(document.getElementById("multisig-min-removal-delta").value, 10) || 0;
 
-    if (additionAddresses.length === 0 && deletionAddresses.length === 0 && minApprovalDelta === 0) {
+    if (additionAddresses.length === 0 && deletionAddresses.length === 0 && minApprovalDelta === 0 && minRemovalDelta === 0) {
       setStatus("multisig-settings-status", "変更内容を入力してください。", "error");
       return;
     }
 
-    setStatus("multisig-settings-status", "送信中...");
+    setStatus("multisig-settings-status", "提案中...（ハッシュロックの承認待ちを含むため数十秒かかります）");
     try {
       const hash = await updateMultisigSettings({
         minApprovalDelta,
+        minRemovalDelta,
         additionAddresses,
         deletionAddresses,
       });
-      setStatus("multisig-settings-status", `✅ 送信しました。Hash: ${hash}`, "success");
+      setStatus(
+        "multisig-settings-status",
+        `✅ 提案を送信しました。Hash: ${hash}\n追加した連署者は、それぞれ「マルチシグ署名」から承認してください。`,
+        "success"
+      );
       document.getElementById("multisig-add-addresses").value = "";
       document.getElementById("multisig-remove-addresses").value = "";
     } catch (e) {
       console.error("updateMultisigSettings error:", e);
-      setStatus("multisig-settings-status", e.message || "送信に失敗しました。", "error");
+      setStatus("multisig-settings-status", e.message || "提案に失敗しました。", "error");
     }
   });
 
   document.getElementById("submit-multisig-send-btn")?.addEventListener("click", async () => {
     const multisigAddress = document.getElementById("multisig-send-from-select").value;
     const recipientAddress = document.getElementById("multisig-send-recipient").value.trim();
-    const amountXem = parseFloat(document.getElementById("multisig-send-amount").value) || 0;
+    const amountXym = parseFloat(document.getElementById("multisig-send-amount").value) || 0;
     const message = document.getElementById("multisig-send-message").value;
 
     if (!multisigAddress) {
@@ -615,9 +665,9 @@ window.addEventListener("load", async () => {
       return;
     }
 
-    setStatus("multisig-send-status", "提案中...");
+    setStatus("multisig-send-status", "提案中...（ハッシュロックの承認待ちを含むため数十秒かかります）");
     try {
-      const hash = await sendFromMultisig({ multisigAddress, recipientAddress, amountXem, message });
+      const hash = await sendFromMultisig({ multisigAddress, recipientAddress, amountXym, message });
       setStatus(
         "multisig-send-status",
         `✅ 送金を提案しました。Hash: ${hash}\n必要な承認数に応じて、他の連署者が「マルチシグ署名」から承認する必要があります。`,
@@ -634,11 +684,10 @@ window.addEventListener("load", async () => {
     if (!btn) return;
 
     const hash = btn.dataset.hash;
-    const multisigAddress = btn.dataset.multisig;
     btn.disabled = true;
     btn.textContent = "署名中...";
     try {
-      await cosignPending(hash, multisigAddress);
+      await cosignPending(hash);
       alert("✅ 連署を送信しました。");
       await loadPendingPartialTransactions();
     } catch (e) {
@@ -650,21 +699,947 @@ window.addEventListener("load", async () => {
   });
 
   // ============================
-  // ネームスペース
+  // 複数送信
   // ============================
+  function renderMultisendRow(data = { address: "", mosaic: "", amount: "", message: "" }) {
+    const container = document.getElementById("multisend-rows");
+    const row = document.createElement("div");
+    row.className = "multisend-row";
+    // ⚠️ data はCSVインポート由来の可能性があり、フィールドに " を含む
+    // 細工されたCSVだと属性からエスケープしてHTMLインジェクションが可能なため、
+    // value属性へ埋め込む前に必ずエスケープする
+    row.innerHTML = `
+      <input class="input-box ms-address" placeholder="送金先アドレス" value="${escapeHtml(data.address)}">
+      <input class="input-box ms-mosaic" placeholder="mosaic (例: symbol.xym)" value="${escapeHtml(data.mosaic)}">
+      <input class="input-box ms-amount" type="number" min="0" step="any" placeholder="数量" value="${escapeHtml(data.amount)}">
+      <input class="input-box ms-message" placeholder="メッセージ" value="${escapeHtml(data.message)}">
+      <button class="account-hide-btn" data-action="remove-row">削除</button>
+    `;
+    container.appendChild(row);
+  }
+
+  function clearMultisendRows() {
+    document.getElementById("multisend-rows").innerHTML = "";
+  }
+
+  function readMultisendRows() {
+    return Array.from(document.querySelectorAll(".multisend-row")).map(row => ({
+      address: row.querySelector(".ms-address").value,
+      mosaic: row.querySelector(".ms-mosaic").value,
+      amount: row.querySelector(".ms-amount").value,
+      message: row.querySelector(".ms-message").value,
+    }));
+  }
+
+  document.getElementById("menu-multisend")?.addEventListener("click", () => {
+    showPage(multisendMenuPage);
+  });
+
+  document.getElementById("menu-multisend-manual")?.addEventListener("click", () => {
+    clearMultisendRows();
+    renderMultisendRow();
+    setStatus("multisend-status", "", "default");
+    showPage(multisendListPage);
+  });
+
+  document.getElementById("menu-multisend-csv")?.addEventListener("click", () => {
+    document.getElementById("multisend-csv-file").value = "";
+    setStatus("multisend-csv-status", "", "default");
+    showPage(multisendCsvPage);
+  });
+
+  document.getElementById("multisend-csv-file")?.addEventListener("change", async e => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    try {
+      const text = await file.text();
+      const rows = parseCsv(text);
+
+      if (rows.length === 0) {
+        setStatus("multisend-csv-status", "CSVから送金先を読み取れませんでした。", "error");
+        return;
+      }
+
+      clearMultisendRows();
+      rows.forEach(r => renderMultisendRow(r));
+      setStatus("multisend-status", `CSVから${rows.length}件読み込みました。内容を確認してください。`, "success");
+      showPage(multisendListPage);
+    } catch (err) {
+      console.error("CSV parse error:", err);
+      setStatus("multisend-csv-status", "CSVの読み込みに失敗しました。", "error");
+    }
+  });
+
+  document.getElementById("multisend-add-row-btn")?.addEventListener("click", () => {
+    if (document.querySelectorAll(".multisend-row").length >= 100) {
+      alert("登録できる送金先は最大100件です。");
+      return;
+    }
+    renderMultisendRow();
+  });
+
+  document.getElementById("multisend-rows")?.addEventListener("click", e => {
+    const btn = e.target.closest('[data-action="remove-row"]');
+    if (!btn) return;
+    btn.closest(".multisend-row")?.remove();
+  });
+
+  document.getElementById("multisend-submit-btn")?.addEventListener("click", async () => {
+    const rows = readMultisendRows();
+
+    if (rows.length === 0) {
+      setStatus("multisend-status", "送金先を1件以上入力してください。", "error");
+      return;
+    }
+
+    if (!confirm(`${rows.length}件の送金を1つのトランザクションとして送信します。よろしいですか？`)) return;
+
+    setStatus("multisend-status", "送信中...");
+    try {
+      const hash = await sendMultiTransfer(rows);
+      setStatus("multisend-status", `✅ 送信しました。Hash: ${hash}`, "success");
+    } catch (e) {
+      console.error("sendMultiTransfer error:", e);
+      setStatus("multisend-status", e.message || "送信に失敗しました。", "error");
+    }
+  });
+
+  // ============================
+  // アポスティーユ
+  // ============================
+  document.getElementById("menu-apostille")?.addEventListener("click", () => {
+    showPage(apostilleMenuPage);
+  });
+
+  document.getElementById("menu-apostille-create")?.addEventListener("click", () => {
+    document.getElementById("apostille-create-file").value = "";
+    document.getElementById("apostille-create-hash").textContent = "";
+    document.getElementById("apostille-owner-address").value = "";
+    document.getElementById("apostille-metadata-key").value = "";
+    document.getElementById("apostille-metadata-value").value = "";
+    setStatus("apostille-create-status", "", "default");
+    showPage(apostilleCreatePage);
+  });
+
+  document.getElementById("menu-apostille-verify")?.addEventListener("click", () => {
+    document.getElementById("apostille-verify-file").value = "";
+    document.getElementById("apostille-verify-hash").textContent = "";
+    document.getElementById("apostille-verify-result").innerHTML = "";
+    setStatus("apostille-verify-status", "", "default");
+    showPage(apostilleVerifyPage);
+  });
+
+  document.getElementById("menu-apostille-history")?.addEventListener("click", () => {
+    document.getElementById("apostille-history-file").value = "";
+    document.getElementById("apostille-history-hash").textContent = "";
+    document.getElementById("apostille-history-list").innerHTML = "";
+    setStatus("apostille-history-status", "", "default");
+    showPage(apostilleHistoryPage);
+  });
+
+  let apostilleCreateHash = null;
+  document.getElementById("apostille-create-file")?.addEventListener("change", async e => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    document.getElementById("apostille-create-hash").textContent = "ハッシュ計算中...";
+    apostilleCreateHash = await computeFileHash(file);
+    document.getElementById("apostille-create-hash").textContent = `SHA-256: ${apostilleCreateHash}`;
+  });
+
+  document.getElementById("apostille-create-btn")?.addEventListener("click", async () => {
+    const file = document.getElementById("apostille-create-file").files?.[0];
+    if (!file || !apostilleCreateHash) {
+      setStatus("apostille-create-status", "ファイルを選択してください。", "error");
+      return;
+    }
+
+    const ownerAddress = document.getElementById("apostille-owner-address").value.trim();
+    const metadataKey = document.getElementById("apostille-metadata-key").value.trim();
+    const metadataValue = document.getElementById("apostille-metadata-value").value.trim();
+
+    setStatus("apostille-create-status", "作成中...");
+    try {
+      const hash = await createApostille({
+        file,
+        fileHashHex: apostilleCreateHash,
+        ownerAddress,
+        metadataKey,
+        metadataValue,
+      });
+      setStatus("apostille-create-status", `✅ 作成しました。Hash: ${hash}`, "success");
+    } catch (e) {
+      console.error("createApostille error:", e);
+      setStatus("apostille-create-status", e.message || "作成に失敗しました。", "error");
+    }
+  });
+
+  let apostilleVerifyHash = null;
+  document.getElementById("apostille-verify-file")?.addEventListener("change", async e => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    document.getElementById("apostille-verify-hash").textContent = "ハッシュ計算中...";
+    apostilleVerifyHash = await computeFileHash(file);
+    document.getElementById("apostille-verify-hash").textContent = `SHA-256: ${apostilleVerifyHash}`;
+  });
+
+  document.getElementById("apostille-verify-btn")?.addEventListener("click", async () => {
+    if (!apostilleVerifyHash) {
+      setStatus("apostille-verify-status", "ファイルを選択してください。", "error");
+      return;
+    }
+
+    const address = document.getElementById("apostille-verify-address").value.trim();
+    const resultEl = document.getElementById("apostille-verify-result");
+    resultEl.innerHTML = "";
+
+    setStatus("apostille-verify-status", "検索中...");
+    try {
+      const matches = await searchApostilleTransactions(apostilleVerifyHash, address);
+      if (matches.length === 0) {
+        setStatus("apostille-verify-status", "❌ 一致する証明が見つかりませんでした（直近の取引のみ検索対象です）。", "error");
+        return;
+      }
+
+      setStatus("apostille-verify-status", `✅ ${matches.length}件の証明が見つかりました。`, "success");
+      // ⚠️ m.cert.fileName / owner / timestamp は他人が自由に設定できる
+      // 文字列(証明書作成者の入力そのまま)なので、必ずエスケープしてから表示する
+      resultEl.innerHTML = matches
+        .map(m => `
+          <div class="harvest-history-item">
+            <div>Hash: ${escapeHtml(m.hash)}</div>
+            <div>高さ: ${escapeHtml(m.height)}</div>
+            <div>ファイル名: ${escapeHtml(m.cert.fileName || "---")}</div>
+            <div>所有者: ${escapeHtml(m.cert.owner)}</div>
+            <div>記録日時(証明書内): ${escapeHtml(m.cert.timestamp)}</div>
+          </div>
+        `)
+        .join("");
+    } catch (e) {
+      console.error("searchApostilleTransactions error:", e);
+      setStatus("apostille-verify-status", "検索に失敗しました。", "error");
+    }
+  });
+
+  let apostilleHistoryHash = null;
+  document.getElementById("apostille-history-file")?.addEventListener("change", async e => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    document.getElementById("apostille-history-hash").textContent = "ハッシュ計算中...";
+    apostilleHistoryHash = await computeFileHash(file);
+    document.getElementById("apostille-history-hash").textContent = `SHA-256: ${apostilleHistoryHash}`;
+  });
+
+  document.getElementById("apostille-history-btn")?.addEventListener("click", async () => {
+    if (!apostilleHistoryHash) {
+      setStatus("apostille-history-status", "ファイルを選択してください。", "error");
+      return;
+    }
+
+    const address = document.getElementById("apostille-history-address").value.trim();
+    const listEl = document.getElementById("apostille-history-list");
+    listEl.innerHTML = "";
+
+    setStatus("apostille-history-status", "検索中...");
+    try {
+      const matches = await searchApostilleTransactions(apostilleHistoryHash, address);
+      if (matches.length === 0) {
+        setStatus("apostille-history-status", "この証明の履歴は見つかりませんでした（直近の取引のみ検索対象です）。", "error");
+        return;
+      }
+
+      setStatus("apostille-history-status", `${matches.length}件の履歴が見つかりました（古い順）。`, "success");
+      // ⚠️ こちらも他人が自由に設定できる文字列なのでエスケープする
+      listEl.innerHTML = matches
+        .map((m, i) => `
+          <div class="harvest-history-item">
+            <div>#${i + 1}</div>
+            <div>Hash: ${escapeHtml(m.hash)}</div>
+            <div>高さ: ${escapeHtml(m.height)}</div>
+            <div>所有者: ${escapeHtml(m.cert.owner)}</div>
+            <div>記録日時(証明書内): ${escapeHtml(m.cert.timestamp)}</div>
+          </div>
+        `)
+        .join("");
+    } catch (e) {
+      console.error("searchApostilleTransactions error(history):", e);
+      setStatus("apostille-history-status", "検索に失敗しました。", "error");
+    }
+  });
+
+  // ============================
+  // 制限機能
+  // ============================
+  function populateOperationSelects() {
+    const addSelect = document.getElementById("restriction-operation-add");
+    const removeSelect = document.getElementById("restriction-operation-remove");
+    const optionsHtml = OPERATION_TYPE_OPTIONS.map(o => `<option value="${o.value}">${o.label}</option>`).join("");
+    addSelect.innerHTML = optionsHtml;
+    removeSelect.innerHTML = optionsHtml;
+  }
+
+  function readSelectedOptions(selectId) {
+    return Array.from(document.getElementById(selectId).selectedOptions).map(o => o.value);
+  }
+
+  document.getElementById("menu-restriction")?.addEventListener("click", () => {
+    showPage(restrictionMenuPage);
+  });
+
+  document.getElementById("menu-restriction-account")?.addEventListener("click", () => {
+    showPage(restrictionAccountMenuPage);
+  });
+
+  document.getElementById("menu-restriction-mosaic-top")?.addEventListener("click", () => {
+    showPage(restrictionMosaicMenuPage);
+  });
+
+  document.getElementById("menu-restriction-address")?.addEventListener("click", async () => {
+    showPage(restrictionAddressPage);
+    await loadAccountRestrictions("restriction-current-address", "address");
+  });
+
+  document.getElementById("menu-restriction-mosaic")?.addEventListener("click", async () => {
+    showPage(restrictionMosaicPage);
+    await loadAccountRestrictions("restriction-current-mosaic", "mosaic");
+  });
+
+  document.getElementById("menu-restriction-operation")?.addEventListener("click", async () => {
+    populateOperationSelects();
+    showPage(restrictionOperationPage);
+    await loadAccountRestrictions("restriction-current-operation", "operation");
+  });
+
+  function populateMosaicRestrictionTypeSelects() {
+    const optionsHtml = MOSAIC_RESTRICTION_TYPE_OPTIONS.map(o => `<option value="${o.value}">${o.label}</option>`).join("");
+    const prevSelect = document.getElementById("mglobal-previous-type");
+    const newSelect = document.getElementById("mglobal-new-type");
+    prevSelect.innerHTML = optionsHtml;
+    newSelect.innerHTML = optionsHtml;
+    prevSelect.value = "NONE";
+    newSelect.value = "EQ";
+  }
+
+  document.getElementById("menu-restriction-mosaic-global")?.addEventListener("click", () => {
+    populateMosaicRestrictionTypeSelects();
+    setStatus("mglobal-status", "", "default");
+    showPage(restrictionMosaicGlobalPage);
+  });
+
+  document.getElementById("menu-restriction-mosaic-address")?.addEventListener("click", () => {
+    setStatus("maddress-status", "", "default");
+    showPage(restrictionMosaicAddressPage);
+  });
+
+  document.getElementById("mglobal-submit")?.addEventListener("click", async () => {
+    const mosaicIdHex = document.getElementById("mglobal-mosaic-id").value.trim();
+    const referenceMosaicIdHex = document.getElementById("mglobal-reference-mosaic-id").value.trim();
+    const keyString = document.getElementById("mglobal-key").value.trim();
+    const previousValue = document.getElementById("mglobal-previous-value").value || "0";
+    const newValue = document.getElementById("mglobal-new-value").value || "0";
+    const previousType = document.getElementById("mglobal-previous-type").value;
+    const newType = document.getElementById("mglobal-new-type").value;
+
+    if (!mosaicIdHex || !keyString) {
+      setStatus("mglobal-status", "モザイクIDと制限キーを入力してください。", "error");
+      return;
+    }
+
+    setStatus("mglobal-status", "設定中...");
+    try {
+      const hash = await setMosaicGlobalRestriction({
+        mosaicIdHex,
+        referenceMosaicIdHex,
+        keyString,
+        previousValue,
+        newValue,
+        previousType,
+        newType,
+      });
+      setStatus("mglobal-status", `✅ 設定しました。Hash: ${hash}`, "success");
+    } catch (e) {
+      console.error("setMosaicGlobalRestriction error:", e);
+      setStatus("mglobal-status", e.message || "設定に失敗しました。", "error");
+    }
+  });
+
+  document.getElementById("maddress-submit")?.addEventListener("click", async () => {
+    const mosaicIdHex = document.getElementById("maddress-mosaic-id").value.trim();
+    const keyString = document.getElementById("maddress-key").value.trim();
+    const targetAddress = document.getElementById("maddress-target").value.trim();
+    const previousValueRaw = document.getElementById("maddress-previous-value").value.trim();
+    const newValue = document.getElementById("maddress-new-value").value || "0";
+    const previousValue = previousValueRaw || "0xFFFFFFFFFFFFFFFF";
+
+    if (!mosaicIdHex || !keyString || !targetAddress) {
+      setStatus("maddress-status", "モザイクID・制限キー・対象アドレスを入力してください。", "error");
+      return;
+    }
+
+    setStatus("maddress-status", "設定中...");
+    try {
+      const hash = await setMosaicAddressRestriction({
+        mosaicIdHex,
+        keyString,
+        previousValue,
+        newValue,
+        targetAddress,
+      });
+      setStatus("maddress-status", `✅ 設定しました。Hash: ${hash}`, "success");
+    } catch (e) {
+      console.error("setMosaicAddressRestriction error:", e);
+      setStatus("maddress-status", e.message || "設定に失敗しました。", "error");
+    }
+  });
+
+  document.getElementById("restriction-address-submit")?.addEventListener("click", async () => {
+    const block = document.getElementById("restriction-address-block").checked;
+    const outgoing = document.getElementById("restriction-address-outgoing").checked;
+    const additions = document.getElementById("restriction-address-add").value.split("\n").map(s => s.trim()).filter(Boolean);
+    const deletions = document.getElementById("restriction-address-remove").value.split("\n").map(s => s.trim()).filter(Boolean);
+
+    if (additions.length === 0 && deletions.length === 0) {
+      setStatus("restriction-address-status", "追加または削除するアドレスを入力してください。", "error");
+      return;
+    }
+
+    setStatus("restriction-address-status", "設定中...");
+    try {
+      const hash = await setAddressRestriction({ block, outgoing, additions, deletions });
+      setStatus("restriction-address-status", `✅ 設定しました。Hash: ${hash}`, "success");
+      document.getElementById("restriction-address-add").value = "";
+      document.getElementById("restriction-address-remove").value = "";
+      await loadAccountRestrictions("restriction-current-address", "address");
+    } catch (e) {
+      console.error("setAddressRestriction error:", e);
+      setStatus("restriction-address-status", e.message || "設定に失敗しました。", "error");
+    }
+  });
+
+  document.getElementById("restriction-mosaic-submit")?.addEventListener("click", async () => {
+    const block = document.getElementById("restriction-mosaic-block").checked;
+    const outgoing = document.getElementById("restriction-mosaic-outgoing").checked;
+    const additions = document.getElementById("restriction-mosaic-add").value.split("\n").map(s => s.trim()).filter(Boolean);
+    const deletions = document.getElementById("restriction-mosaic-remove").value.split("\n").map(s => s.trim()).filter(Boolean);
+
+    if (additions.length === 0 && deletions.length === 0) {
+      setStatus("restriction-mosaic-status", "追加または削除するモザイクIDを入力してください。", "error");
+      return;
+    }
+
+    setStatus("restriction-mosaic-status", "設定中...");
+    try {
+      const hash = await setMosaicRestriction({ block, outgoing, additions, deletions });
+      setStatus("restriction-mosaic-status", `✅ 設定しました。Hash: ${hash}`, "success");
+      document.getElementById("restriction-mosaic-add").value = "";
+      document.getElementById("restriction-mosaic-remove").value = "";
+      await loadAccountRestrictions("restriction-current-mosaic", "mosaic");
+    } catch (e) {
+      console.error("setMosaicRestriction error:", e);
+      setStatus("restriction-mosaic-status", e.message || "設定に失敗しました。", "error");
+    }
+  });
+
+  document.getElementById("restriction-operation-submit")?.addEventListener("click", async () => {
+    const block = document.getElementById("restriction-operation-block").checked;
+    const additions = readSelectedOptions("restriction-operation-add");
+    const deletions = readSelectedOptions("restriction-operation-remove");
+
+    if (additions.length === 0 && deletions.length === 0) {
+      setStatus("restriction-operation-status", "追加または削除する種類を選択してください。", "error");
+      return;
+    }
+
+    setStatus("restriction-operation-status", "設定中...");
+    try {
+      const hash = await setOperationRestriction({ block, outgoing: true, additions, deletions });
+      setStatus("restriction-operation-status", `✅ 設定しました。Hash: ${hash}`, "success");
+      await loadAccountRestrictions("restriction-current-operation", "operation");
+    } catch (e) {
+      console.error("setOperationRestriction error:", e);
+      setStatus("restriction-operation-status", e.message || "設定に失敗しました。", "error");
+    }
+  });
+
+  // ============================
+  // オフライントランザクション(作成・署名 / ログイン中のみ)
+  // ============================
+  let offlineTxGenerated = null;
+
+  document.getElementById("menu-offline-tx")?.addEventListener("click", () => {
+    offlineTxGenerated = null;
+    document.getElementById("offline-tx-recipient").value = "";
+    document.getElementById("offline-tx-mosaic").value = "";
+    document.getElementById("offline-tx-amount").value = "0";
+    document.getElementById("offline-tx-message").value = "";
+    document.getElementById("offline-tx-result").style.display = "none";
+    setStatus("offline-tx-status", "", "default");
+    showPage(offlineTxCreatePage);
+  });
+
+  document.getElementById("offline-tx-sign-btn")?.addEventListener("click", async () => {
+    const recipientAddress = document.getElementById("offline-tx-recipient").value.trim();
+    const mosaicInput = document.getElementById("offline-tx-mosaic").value.trim();
+    const amount = Number(document.getElementById("offline-tx-amount").value);
+    const message = document.getElementById("offline-tx-message").value;
+
+    if (!recipientAddress) {
+      setStatus("offline-tx-status", "宛先アドレスを入力してください。", "error");
+      return;
+    }
+    if (!Number.isFinite(amount) || amount < 0) {
+      setStatus("offline-tx-status", "数量が不正です。", "error");
+      return;
+    }
+
+    const mosaicIdHex = mosaicInput || getXymMosaicIdHex();
+
+    setStatus("offline-tx-status", "署名中...");
+    try {
+      offlineTxGenerated = await composeAndSignOfflineTransfer({
+        recipientAddress,
+        mosaicIdHex,
+        amount,
+        message,
+      });
+      document.getElementById("offline-tx-hash").textContent = offlineTxGenerated.hash;
+      document.getElementById("offline-tx-result").style.display = "block";
+      setStatus("offline-tx-status", "✅ 署名しました。ノードへはまだ送信されていません。ファイルをダウンロードしてください。", "success");
+    } catch (e) {
+      console.error("composeAndSignOfflineTransfer error:", e);
+      setStatus("offline-tx-status", e.message || "署名に失敗しました。", "error");
+    }
+  });
+
+  document.getElementById("offline-tx-download-btn")?.addEventListener("click", () => {
+    if (!offlineTxGenerated) return;
+    downloadOfflineTxJson(offlineTxGenerated, `offline-tx-${offlineTxGenerated.hash.slice(0, 8)}.json`);
+  });
+
+  // ============================
+  // オフライン署名データの読み込み・ブロードキャスト(ログイン不要)
+  // ============================
+  let offlineBroadcastJson = null;
+
+  function openOfflineBroadcastPage() {
+    offlineBroadcastJson = null;
+    document.getElementById("offline-broadcast-file").value = "";
+    document.getElementById("offline-broadcast-preview").style.display = "none";
+    setStatus("offline-broadcast-status", "", "default");
+    showPage(offlineBroadcastPage);
+  }
+
+  document.getElementById("welcome-offline-broadcast-btn")?.addEventListener("click", openOfflineBroadcastPage);
+  document.getElementById("unlock-offline-broadcast-btn")?.addEventListener("click", openOfflineBroadcastPage);
+
+  document.getElementById("offline-broadcast-file")?.addEventListener("change", async e => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const nodeInput = document.getElementById("offline-broadcast-node");
+
+    try {
+      const text = await file.text();
+      const json = JSON.parse(text);
+      offlineBroadcastJson = validateOfflineTxJson(json);
+
+      document.getElementById("offline-broadcast-network").textContent = json.network ?? "---";
+      document.getElementById("offline-broadcast-type").textContent = json.transactionType ?? "---";
+      document.getElementById("offline-broadcast-hash").textContent = json.hash ?? "---";
+      document.getElementById("offline-broadcast-signer").textContent = json.signerPublicKey ?? "---";
+      document.getElementById("offline-broadcast-preview").style.display = "block";
+      setStatus("offline-broadcast-status", "ノードを自動選択中...", "default");
+
+      const isTestnet = json.network === "TEST_NET";
+      const submitBtn = document.getElementById("offline-broadcast-submit");
+      if (submitBtn) submitBtn.disabled = false;
+
+      try {
+        nodeInput.value = await selectNode(isTestnet);
+        setStatus("offline-broadcast-status", "既に送信済みでないか確認中...", "default");
+
+        const existingStatus = await checkAlreadyBroadcastStatus(json.hash, nodeInput.value);
+        if (existingStatus === "confirmed" || existingStatus === "unconfirmed") {
+          alert("署名済みです。このトランザクションは既にブロックチェーンへ送信・承認済みのため読み込めません。");
+          setStatus(
+            "offline-broadcast-status",
+            `❌ 既に送信済みです（状態: ${existingStatus}）。二重送信になるためブロードキャストできません。`,
+            "error"
+          );
+          if (submitBtn) submitBtn.disabled = true;
+        } else {
+          setStatus("offline-broadcast-status", "ノードを自動選択しました。必要であれば変更できます。", "success");
+        }
+      } catch (nodeErr) {
+        console.warn("ノード自動選択に失敗しました。手動で入力してください。", nodeErr);
+        setStatus("offline-broadcast-status", "ノードの自動選択に失敗しました。手動で入力してください。", "error");
+      }
+    } catch (err) {
+      console.error("offline broadcast file parse error:", err);
+      offlineBroadcastJson = null;
+      document.getElementById("offline-broadcast-preview").style.display = "none";
+      setStatus("offline-broadcast-status", err.message || "ファイルの読み込みに失敗しました。", "error");
+    }
+  });
+
+  document.getElementById("offline-broadcast-submit")?.addEventListener("click", async () => {
+    const nodeUrl = document.getElementById("offline-broadcast-node").value.trim();
+
+    if (!offlineBroadcastJson) {
+      setStatus("offline-broadcast-status", "ファイルを選択してください。", "error");
+      return;
+    }
+    if (!nodeUrl) {
+      setStatus("offline-broadcast-status", "ノードURLを入力してください。", "error");
+      return;
+    }
+
+    setStatus("offline-broadcast-status", "既に送信済みでないか再確認中...");
+    try {
+      const existingStatus = await checkAlreadyBroadcastStatus(offlineBroadcastJson.hash, nodeUrl);
+      if (existingStatus === "confirmed" || existingStatus === "unconfirmed") {
+        alert("署名済みです。このトランザクションは既にブロックチェーンへ送信・承認済みのため読み込めません。");
+        setStatus(
+          "offline-broadcast-status",
+          `❌ 既に送信済みです（状態: ${existingStatus}）。二重送信になるためブロードキャストできません。`,
+          "error"
+        );
+        return;
+      }
+    } catch (e) {
+      console.warn("事前確認に失敗しました。続行します。", e);
+    }
+
+    setStatus("offline-broadcast-status", "アナウンス中...");
+    try {
+      await broadcastOfflineTx(offlineBroadcastJson, nodeUrl);
+      setStatus("offline-broadcast-status", `✅ ノードへ送信しました。Hash: ${offlineBroadcastJson.hash}`, "success");
+    } catch (e) {
+      console.error("broadcastOfflineTx error:", e);
+      setStatus("offline-broadcast-status", e.message || "アナウンスに失敗しました。", "error");
+    }
+  });
+
+  // ============================
+  // 手数料代払い(スポンサーシップ)
+  // ============================
+
+  // --- メニュー ---
+  document.getElementById("menu-fee-delegation")?.addEventListener("click", () => {
+    showPage(feeDelegationMenuPage);
+  });
+  document.getElementById("back-advanced-fee-delegation")?.addEventListener("click", () => showPage(advancedPage));
+
+  // --- ユーザー画面 ---
+  function populateFeeDelegMosaicSelect() {
+    const select = document.getElementById("fee-deleg-req-mosaic");
+    if (!select) return;
+    const entries = Object.entries(appState.mosaicInfo ?? {});
+    select.innerHTML = entries.length
+      ? entries
+          .map(([id, info]) => `<option value="${id}">${info.mosaicName} (${id})</option>`)
+          .join("")
+      : `<option value="">-- 保有モザイクがありません --</option>`;
+  }
+
+  let feeDelegCosignInfoLoaded = null;
+
+  // feeDelegation.js の buildCosignInfo() / parseCosignInfoJson() が扱う
+  // コサイン情報は { aggregateHash, node } という形だが、
+  // multisig.js の loadPendingPartialTransactions() は汎用的に
+  // { hash, node } という形を期待しているため、ここでキー名を変換する。
+  function toExternalHashParam(cosignInfo) {
+    if (!cosignInfo) return null;
+    return { hash: cosignInfo.aggregateHash, node: cosignInfo.node };
+  }
+
+  document.getElementById("menu-fee-delegation-user")?.addEventListener("click", async () => {
+    document.getElementById("fee-deleg-user-balance").textContent =
+      document.getElementById("account-balance")?.textContent || "---";
+    populateFeeDelegMosaicSelect();
+    document.getElementById("fee-deleg-req-preview").style.display = "none";
+    setStatus("fee-deleg-req-status", "", "default");
+    showPage(feeDelegationUserPage);
+    await loadPendingPartialTransactions("fee-deleg-user-status-list", toExternalHashParam(feeDelegCosignInfoLoaded));
+  });
+  document.getElementById("back-fee-delegation-menu-user")?.addEventListener("click", () => showPage(feeDelegationMenuPage));
+
+  let feeDelegRequestGenerated = null;
+
+  document.getElementById("fee-deleg-req-create-btn")?.addEventListener("click", () => {
+    const recipientAddress = document.getElementById("fee-deleg-req-recipient").value.trim();
+    const mosaicIdHex = document.getElementById("fee-deleg-req-mosaic").value;
+    const amount = document.getElementById("fee-deleg-req-amount").value;
+    const message = document.getElementById("fee-deleg-req-message").value;
+
+    try {
+      feeDelegRequestGenerated = createSponsorshipRequest({ recipientAddress, mosaicIdHex, amount, message });
+
+      document.getElementById("fee-deleg-req-preview-requester").textContent = feeDelegRequestGenerated.requesterAddress;
+      document.getElementById("fee-deleg-req-preview-recipient").textContent = feeDelegRequestGenerated.recipientAddress;
+      document.getElementById("fee-deleg-req-preview-mosaic").textContent =
+        `${feeDelegRequestGenerated.mosaicName} (${feeDelegRequestGenerated.mosaicId})`;
+      document.getElementById("fee-deleg-req-preview-amount").textContent = feeDelegRequestGenerated.amountDisplay;
+      document.getElementById("fee-deleg-req-preview").style.display = "block";
+      setStatus("fee-deleg-req-status", "依頼JSONを作成しました。オーナーへ渡してください。", "success");
+    } catch (e) {
+      console.error("createSponsorshipRequest error:", e);
+      feeDelegRequestGenerated = null;
+      document.getElementById("fee-deleg-req-preview").style.display = "none";
+      setStatus("fee-deleg-req-status", e.message || "作成に失敗しました。", "error");
+    }
+  });
+
+  document.getElementById("fee-deleg-req-download-btn")?.addEventListener("click", () => {
+    if (!feeDelegRequestGenerated) return;
+    downloadSponsorshipRequestJson(feeDelegRequestGenerated);
+  });
+
+  document.getElementById("fee-deleg-req-copy-btn")?.addEventListener("click", () => {
+    if (!feeDelegRequestGenerated) return;
+    navigator.clipboard.writeText(JSON.stringify(feeDelegRequestGenerated, null, 2));
+    showPopup("依頼JSONをコピーしました");
+  });
+
+  // ユーザー画面のタブ切替
+  setupTabGroup(
+    ["fee-deleg-user-tab-send", "fee-deleg-user-tab-status", "fee-deleg-user-tab-history"],
+    ["fee-deleg-user-content-send", "fee-deleg-user-content-status", "fee-deleg-user-content-history"],
+    [
+      null,
+      () => loadPendingPartialTransactions("fee-deleg-user-status-list", toExternalHashParam(feeDelegCosignInfoLoaded)),
+      () => loadRecentTx("fee-deleg-user-history-list"),
+    ]
+  );
+
+  // ユーザー画面: オーナーから受け取った「コサイン情報」の読み込み
+  // (自分の接続ノードにまだ伝播していない場合でも、指定ノードから直接確認できる)
+  document.getElementById("fee-deleg-user-cosign-info-file")?.addEventListener("change", async e => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    try {
+      const text = await file.text();
+      feeDelegCosignInfoLoaded = parseCosignInfoJson(text);
+      setStatus(
+        "fee-deleg-user-cosign-info-status",
+        `✅ 読み込みました。指定ノードを確認します… (Hash: ${feeDelegCosignInfoLoaded.aggregateHash})`,
+        "success"
+      );
+      await loadPendingPartialTransactions("fee-deleg-user-status-list", toExternalHashParam(feeDelegCosignInfoLoaded));
+    } catch (e) {
+      console.error("parseCosignInfoJson error:", e);
+      feeDelegCosignInfoLoaded = null;
+      setStatus("fee-deleg-user-cosign-info-status", e.message || "読み込みに失敗しました。", "error");
+    }
+  });
+
+  // ユーザー画面: コサインボタン(マルチシグ署名と同じ仕組み)
+  // data-node が付いている場合(コサイン情報から直接取得した項目)は、
+  // 自分の接続ノードではなく、そのノードへ直接コサインをアナウンスする。
+  document.getElementById("fee-deleg-user-status-list")?.addEventListener("click", async e => {
+    const btn = e.target.closest('[data-action="cosign"]');
+    if (!btn) return;
+
+    const hash = btn.dataset.hash;
+    const nodeOverride = btn.dataset.node || null;
+    btn.disabled = true;
+    btn.textContent = "署名中...";
+    try {
+      await cosignPending(hash, nodeOverride);
+      alert("✅ 送金が完了しました(コサインを送信しました)。");
+      await loadPendingPartialTransactions("fee-deleg-user-status-list", toExternalHashParam(feeDelegCosignInfoLoaded));
+    } catch (e) {
+      console.error("cosignPending error:", e);
+      if (!e?.cancelled) alert(e.message || "連署に失敗しました。");
+      btn.disabled = false;
+      btn.textContent = "署名する";
+    }
+  });
+
+  // --- オーナー画面 ---
+  document.getElementById("menu-fee-delegation-owner")?.addEventListener("click", async () => {
+    document.getElementById("fee-deleg-owner-balance").textContent =
+      document.getElementById("account-balance")?.textContent || "---";
+    document.getElementById("fee-deleg-owner-request-file").value = "";
+    document.getElementById("fee-deleg-owner-request-preview").style.display = "none";
+    document.getElementById("fee-deleg-owner-cosign-info").style.display = "none";
+    setStatus("fee-deleg-owner-request-status", "", "default");
+    showPage(feeDelegationOwnerPage);
+    await loadPendingPartialTransactions("fee-deleg-owner-pending-list");
+  });
+  document.getElementById("back-fee-delegation-menu-owner")?.addEventListener("click", () => showPage(feeDelegationMenuPage));
+
+  let feeDelegRequestLoaded = null;
+  let feeDelegCosignInfoGenerated = null;
+
+  document.getElementById("fee-deleg-owner-request-file")?.addEventListener("change", async e => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    try {
+      const text = await file.text();
+      feeDelegRequestLoaded = parseSponsorshipRequestJson(text);
+
+      document.getElementById("fee-deleg-owner-preview-requester").textContent = feeDelegRequestLoaded.requesterAddress;
+      document.getElementById("fee-deleg-owner-preview-recipient").textContent = feeDelegRequestLoaded.recipientAddress;
+      document.getElementById("fee-deleg-owner-preview-mosaic").textContent =
+        `${feeDelegRequestLoaded.mosaicName ?? feeDelegRequestLoaded.mosaicId} (${feeDelegRequestLoaded.mosaicId})`;
+      document.getElementById("fee-deleg-owner-preview-amount").textContent = feeDelegRequestLoaded.amountDisplay;
+      document.getElementById("fee-deleg-owner-preview-message").textContent = feeDelegRequestLoaded.message || "(なし)";
+      document.getElementById("fee-deleg-owner-request-preview").style.display = "block";
+      setStatus("fee-deleg-owner-request-status", "", "default");
+    } catch (e) {
+      console.error("parseSponsorshipRequestJson error:", e);
+      feeDelegRequestLoaded = null;
+      document.getElementById("fee-deleg-owner-request-preview").style.display = "none";
+      setStatus("fee-deleg-owner-request-status", e.message || "読み込みに失敗しました。", "error");
+    }
+  });
+
+  document.getElementById("fee-deleg-owner-approve-btn")?.addEventListener("click", async () => {
+    if (!feeDelegRequestLoaded) return;
+
+    setStatus("fee-deleg-owner-request-status", "確認画面を表示しています...");
+    try {
+      const requestSnapshot = feeDelegRequestLoaded;
+      const hash = await approveSponsorshipRequest(feeDelegRequestLoaded);
+
+      // アグリゲートボンデッドTxは、このノードのローカルキャッシュにのみ載る。
+      // 依頼者が別ノードに接続していると「支払い状況」タブに表示されないことが
+      // あるため、ノード情報を含む「コサイン情報」を発行し、渡せるようにする。
+      feeDelegCosignInfoGenerated = buildCosignInfo(requestSnapshot, hash);
+
+      setStatus(
+        "fee-deleg-owner-request-status",
+        `✅ アナウンスしました。依頼者がコサインすると送金が完了します。Hash: ${hash}`,
+        "success"
+      );
+      document.getElementById("fee-deleg-owner-request-file").value = "";
+      document.getElementById("fee-deleg-owner-request-preview").style.display = "none";
+      feeDelegRequestLoaded = null;
+
+      document.getElementById("fee-deleg-owner-cosign-info-hash").textContent = hash;
+      document.getElementById("fee-deleg-owner-cosign-info-node").textContent = feeDelegCosignInfoGenerated.node;
+      document.getElementById("fee-deleg-owner-cosign-info").style.display = "block";
+
+      await loadPendingPartialTransactions("fee-deleg-owner-pending-list");
+    } catch (e) {
+      if (e?.cancelled) {
+        setStatus("fee-deleg-owner-request-status", "キャンセルしました。");
+        return;
+      }
+      console.error("approveSponsorshipRequest error:", e);
+      setStatus("fee-deleg-owner-request-status", e.message || "処理に失敗しました。", "error");
+    }
+  });
+
+  document.getElementById("fee-deleg-owner-cosign-info-download-btn")?.addEventListener("click", () => {
+    if (!feeDelegCosignInfoGenerated) return;
+    downloadCosignInfoJson(feeDelegCosignInfoGenerated);
+  });
+
+  document.getElementById("fee-deleg-owner-cosign-info-copy-btn")?.addEventListener("click", () => {
+    if (!feeDelegCosignInfoGenerated) return;
+    navigator.clipboard.writeText(JSON.stringify(feeDelegCosignInfoGenerated, null, 2));
+    showPopup("コサイン情報をコピーしました");
+  });
+
+  // オーナー画面のタブ切替
+  setupTabGroup(
+    ["fee-deleg-owner-tab-pending", "fee-deleg-owner-tab-locks", "fee-deleg-owner-tab-settings", "fee-deleg-owner-tab-log"],
+    ["fee-deleg-owner-content-pending", "fee-deleg-owner-content-locks", "fee-deleg-owner-content-settings", "fee-deleg-owner-content-log"],
+    [
+      () => loadPendingPartialTransactions("fee-deleg-owner-pending-list"),
+      null,
+      null,
+      null,
+    ]
+  );
+
+  // オーナー画面: コサイン待ち一覧のコサインボタン
+  document.getElementById("fee-deleg-owner-pending-list")?.addEventListener("click", async e => {
+    const btn = e.target.closest('[data-action="cosign"]');
+    if (!btn) return;
+
+    const hash = btn.dataset.hash;
+    const nodeOverride = btn.dataset.node || null;
+    btn.disabled = true;
+    btn.textContent = "署名中...";
+    try {
+      await cosignPending(hash, nodeOverride);
+      alert("✅ 連署を送信しました。");
+      await loadPendingPartialTransactions("fee-deleg-owner-pending-list");
+    } catch (e) {
+      console.error("cosignPending error:", e);
+      if (!e?.cancelled) alert(e.message || "連署に失敗しました。");
+      btn.disabled = false;
+      btn.textContent = "署名する";
+    }
+  });
+
+  async function updateRootNamespaceFeeEstimate() {
+    const el = document.getElementById("root-namespace-fee-estimate");
+    const rentalEl = document.getElementById("root-namespace-rental-fee-estimate");
+    if (!el) return;
+    const name = document.getElementById("root-namespace-name").value.trim();
+    const duration = parseInt(document.getElementById("root-namespace-duration").value, 10);
+    if (!name || !Number.isInteger(duration) || duration <= 0) {
+      el.textContent = "---";
+      if (rentalEl) rentalEl.textContent = "---";
+      return;
+    }
+    try {
+      el.textContent = `約 ${estimateRootNamespaceFee(name, duration)} XYM`;
+    } catch {
+      el.textContent = "---";
+    }
+    if (rentalEl) {
+      try {
+        rentalEl.textContent = `約 ${await estimateRootNamespaceRentalFee(duration)} XYM`;
+      } catch {
+        rentalEl.textContent = "---";
+      }
+    }
+  }
+
+  document.getElementById("root-namespace-name")?.addEventListener("input", updateRootNamespaceFeeEstimate);
+  document.getElementById("root-namespace-duration")?.addEventListener("input", updateRootNamespaceFeeEstimate);
+
+  document.getElementById("root-namespace-calc-btn")?.addEventListener("click", () => {
+    const panel = document.getElementById("root-namespace-duration-presets");
+    panel.style.display = panel.style.display === "none" ? "flex" : "none";
+  });
+
+  document.getElementById("root-namespace-duration-presets")?.addEventListener("click", e => {
+    const btn = e.target.closest("[data-days]");
+    if (!btn) return;
+    const days = parseInt(btn.dataset.days, 10);
+    document.getElementById("root-namespace-duration").value = days * 2880;
+    document.getElementById("root-namespace-duration-presets").style.display = "none";
+    updateRootNamespaceFeeEstimate();
+  });
+
   document.getElementById("register-root-namespace-btn")?.addEventListener("click", async () => {
     const name = document.getElementById("root-namespace-name").value.trim();
+    const duration = parseInt(document.getElementById("root-namespace-duration").value, 10);
 
     if (!name) {
       setStatus("root-namespace-status", "ネームスペース名を入力してください。", "error");
       return;
     }
+    if (!Number.isInteger(duration) || duration <= 0) {
+      setStatus("root-namespace-status", "有効期間(ブロック数)を正しく入力してください。", "error");
+      return;
+    }
 
     setStatus("root-namespace-status", "登録中...");
     try {
-      const hash = await registerRootNamespace(name);
+      const hash = await registerRootNamespace(name, duration);
       setStatus("root-namespace-status", `✅ 登録リクエストを送信しました。Hash: ${hash}`, "success");
       document.getElementById("root-namespace-name").value = "";
+      document.getElementById("root-namespace-duration").value = "";
+      updateRootNamespaceFeeEstimate();
       await loadOwnedNamespaces();
       await populateParentNamespaceSelect();
     } catch (e) {
@@ -673,60 +1648,290 @@ window.addEventListener("load", async () => {
     }
   });
 
-  document.getElementById("register-child-namespace-btn")?.addEventListener("click", async () => {
-    const parentFqn = document.getElementById("child-namespace-parent-select").value;
-    const childName = document.getElementById("child-namespace-name").value.trim();
-
-    if (!parentFqn) {
-      setStatus("child-namespace-status", "親ネームスペースを選択してください。", "error");
+  async function updateSubNamespaceFeeEstimate() {
+    const el = document.getElementById("sub-namespace-fee-estimate");
+    const rentalEl = document.getElementById("sub-namespace-rental-fee-estimate");
+    if (!el) return;
+    const parentId = document.getElementById("sub-namespace-parent-select").value;
+    const subName = document.getElementById("sub-namespace-name").value.trim();
+    if (!parentId || !subName) {
+      el.textContent = "---";
+      if (rentalEl) rentalEl.textContent = "---";
       return;
     }
-    if (!childName) {
-      setStatus("child-namespace-status", "子ネームスペース名を入力してください。", "error");
-      return;
-    }
-
-    setStatus("child-namespace-status", "登録中...");
     try {
-      const hash = await registerChildNamespace(parentFqn, childName);
-      setStatus("child-namespace-status", `✅ 登録リクエストを送信しました。Hash: ${hash}`, "success");
-      document.getElementById("child-namespace-name").value = "";
+      el.textContent = `約 ${estimateSubNamespaceFee(parentId, subName)} XYM`;
+    } catch {
+      el.textContent = "---";
+    }
+    if (rentalEl) {
+      try {
+        rentalEl.textContent = `約 ${await estimateSubNamespaceRentalFee()} XYM`;
+      } catch {
+        rentalEl.textContent = "---";
+      }
+    }
+  }
+
+  document.getElementById("sub-namespace-parent-select")?.addEventListener("change", updateSubNamespaceFeeEstimate);
+  document.getElementById("sub-namespace-name")?.addEventListener("input", updateSubNamespaceFeeEstimate);
+
+  document.getElementById("register-sub-namespace-btn")?.addEventListener("click", async () => {
+    const parentId = document.getElementById("sub-namespace-parent-select").value;
+    const subName = document.getElementById("sub-namespace-name").value.trim();
+
+    if (!parentId) {
+      setStatus("sub-namespace-status", "親ネームスペースを選択してください。", "error");
+      return;
+    }
+    if (!subName) {
+      setStatus("sub-namespace-status", "サブネームスペース名を入力してください。", "error");
+      return;
+    }
+
+    setStatus("sub-namespace-status", "登録中...");
+    try {
+      const hash = await registerSubNamespace(parentId, subName);
+      setStatus("sub-namespace-status", `✅ 登録リクエストを送信しました。Hash: ${hash}`, "success");
+      document.getElementById("sub-namespace-name").value = "";
+      updateSubNamespaceFeeEstimate();
       await loadOwnedNamespaces();
       await populateParentNamespaceSelect();
     } catch (e) {
-      console.error("registerChildNamespace error:", e);
-      setStatus("child-namespace-status", e.message || "登録に失敗しました。", "error");
+      console.error("registerSubNamespace error:", e);
+      setStatus("sub-namespace-status", e.message || "登録に失敗しました。", "error");
     }
   });
 
-  // ============================
-  // モザイク作成
-  // ============================
-  document.getElementById("create-mosaic-btn")?.addEventListener("click", async () => {
-    const namespaceFqn = document.getElementById("mosaic-link-namespace-select").value;
-    const mosaicName = document.getElementById("mosaic-name-input")?.value?.trim();
-    const description = document.getElementById("mosaic-description-input")?.value?.trim() || "";
-    const divisibility = parseInt(document.getElementById("mosaic-divisibility").value, 10) || 0;
-    const initialSupply = parseFloat(document.getElementById("mosaic-initial-supply").value) || 0;
-    const transferable = document.getElementById("mosaic-transferable").checked;
-    const supplyMutable = document.getElementById("mosaic-supply-mutable").checked;
+  async function populateNamespaceAliasSelects() {
+    try {
+      const options = await fetchOwnedNamespaceOptions();
+      const optionsHtml = options.length
+        ? options.map(ns => `<option value="${ns.id}">${ns.name}</option>`).join("")
+        : `<option value="">-- 保有ネームスペースがありません --</option>`;
+      document.getElementById("ns-link-mosaic-namespace-select").innerHTML = optionsHtml;
+      document.getElementById("ns-link-address-namespace-select").innerHTML = optionsHtml;
+    } catch (e) {
+      console.warn("ネームスペース候補の取得に失敗しました", e);
+    }
+  }
 
-    if (!mosaicName) {
-      setStatus("mosaic-create-status", "モザイク名を入力してください。", "error");
+  async function populateNsLinkMosaicSelect() {
+    const select = document.getElementById("ns-link-mosaic-id-select");
+    select.innerHTML = `<option value="">-- 読み込み中... --</option>`;
+    try {
+      const ids = await fetchOwnedMosaicIds();
+      select.innerHTML = ids.length
+        ? ids.map(id => `<option value="${id}">${id}</option>`).join("")
+        : `<option value="">-- 作成したモザイクがありません --</option>`;
+    } catch (e) {
+      console.warn("モザイク候補の取得に失敗しました", e);
+      select.innerHTML = `<option value="">-- 取得に失敗しました --</option>`;
+    }
+  }
+
+  document.getElementById("ns-link-mosaic-btn")?.addEventListener("click", () => submitMosaicAliasFromNamespacePage("link"));
+  document.getElementById("ns-unlink-mosaic-btn")?.addEventListener("click", () => submitMosaicAliasFromNamespacePage("unlink"));
+
+  function updateNsLinkMosaicFeeEstimate() {
+    const el = document.getElementById("ns-link-mosaic-fee-estimate");
+    if (!el) return;
+    const namespaceId = document.getElementById("ns-link-mosaic-namespace-select").value;
+    const mosaicId = document.getElementById("ns-link-mosaic-id-select").value;
+    if (!namespaceId || !mosaicId) {
+      el.textContent = "---";
+      return;
+    }
+    try {
+      el.textContent = `約 ${estimateMosaicAliasFee(mosaicId, namespaceId, "link")} XYM`;
+    } catch {
+      el.textContent = "---";
+    }
+  }
+
+  document.getElementById("ns-link-mosaic-namespace-select")?.addEventListener("change", updateNsLinkMosaicFeeEstimate);
+  document.getElementById("ns-link-mosaic-id-select")?.addEventListener("change", updateNsLinkMosaicFeeEstimate);
+
+  async function submitMosaicAliasFromNamespacePage(action) {
+    const namespaceId = document.getElementById("ns-link-mosaic-namespace-select").value;
+    const mosaicId = document.getElementById("ns-link-mosaic-id-select").value;
+
+    if (!namespaceId || !mosaicId) {
+      setStatus("ns-link-mosaic-status", "ネームスペースとモザイクを指定してください。", "error");
       return;
     }
 
+    setStatus("ns-link-mosaic-status", action === "unlink" ? "解除中..." : "リンク中...");
+    try {
+      const hash = await setMosaicAlias(mosaicId, namespaceId, action);
+      setStatus("ns-link-mosaic-status", `✅ 完了しました。Hash: ${hash}`, "success");
+      await loadOwnedNamespaces();
+    } catch (e) {
+      console.error("setMosaicAlias error:", e);
+      setStatus("ns-link-mosaic-status", e.message || "処理に失敗しました。", "error");
+    }
+  }
+
+  document.getElementById("ns-link-address-btn")?.addEventListener("click", () => submitAddressAliasFromNamespacePage("link"));
+  document.getElementById("ns-unlink-address-btn")?.addEventListener("click", () => submitAddressAliasFromNamespacePage("unlink"));
+
+  function updateNsLinkAddressFeeEstimate() {
+    const el = document.getElementById("ns-link-address-fee-estimate");
+    if (!el) return;
+    const namespaceId = document.getElementById("ns-link-address-namespace-select").value;
+    const targetAddress = document.getElementById("ns-link-address-target").value.trim();
+    if (!namespaceId || !targetAddress) {
+      el.textContent = "---";
+      return;
+    }
+    try {
+      el.textContent = `約 ${estimateAddressAliasFee(namespaceId, targetAddress, "link")} XYM`;
+    } catch {
+      el.textContent = "---";
+    }
+  }
+
+  document.getElementById("ns-link-address-namespace-select")?.addEventListener("change", updateNsLinkAddressFeeEstimate);
+  document.getElementById("ns-link-address-target")?.addEventListener("input", updateNsLinkAddressFeeEstimate);
+
+  async function submitAddressAliasFromNamespacePage(action) {
+    const namespaceId = document.getElementById("ns-link-address-namespace-select").value;
+    const targetAddress = document.getElementById("ns-link-address-target").value.trim();
+
+    if (!namespaceId || !targetAddress) {
+      setStatus("ns-link-address-status", "ネームスペースと対象アドレスを指定してください。", "error");
+      return;
+    }
+
+    setStatus("ns-link-address-status", action === "unlink" ? "解除中..." : "リンク中...");
+    try {
+      const hash = await setAddressAlias(namespaceId, targetAddress, action);
+      setStatus("ns-link-address-status", `✅ 完了しました。Hash: ${hash}`, "success");
+      await loadOwnedNamespaces();
+    } catch (e) {
+      console.error("setAddressAlias error:", e);
+      setStatus("ns-link-address-status", e.message || "処理に失敗しました。", "error");
+    }
+  }
+
+  document.getElementById("owned-mosaic-list")?.addEventListener("click", async e => {
+    const linkBtn = e.target.closest('[data-action="link-mosaic"]');
+    const unlinkBtn = e.target.closest('[data-action="unlink-mosaic"]');
+
+    if (linkBtn) {
+      const mosaicId = linkBtn.dataset.mosaicId;
+      const select = document.querySelector(`.mosaic-link-select[data-mosaic-id="${mosaicId}"]`);
+      const namespaceId = select?.value;
+
+      if (!namespaceId) {
+        alert("ネームスペースを選択してください。");
+        return;
+      }
+
+      linkBtn.disabled = true;
+      linkBtn.textContent = "リンク中...";
+      try {
+        await setMosaicAlias(mosaicId, namespaceId, "link");
+        alert("✅ リンクリクエストを送信しました。");
+        await loadOwnedMosaicsWithAlias();
+      } catch (e) {
+        console.error("setMosaicAlias error:", e);
+        alert(e.message || "リンクに失敗しました。");
+        linkBtn.disabled = false;
+        linkBtn.textContent = "リンクする";
+      }
+      return;
+    }
+
+    if (unlinkBtn) {
+      const mosaicId = unlinkBtn.dataset.mosaicId;
+      const namespaceId = unlinkBtn.dataset.namespaceId;
+
+      unlinkBtn.disabled = true;
+      unlinkBtn.textContent = "解除中...";
+      try {
+        await setMosaicAlias(mosaicId, namespaceId, "unlink");
+        alert("✅ リンク解除リクエストを送信しました。");
+        await loadOwnedMosaicsWithAlias();
+      } catch (e) {
+        console.error("setMosaicAlias(unlink) error:", e);
+        alert(e.message || "リンク解除に失敗しました。");
+        unlinkBtn.disabled = false;
+        unlinkBtn.textContent = "リンク解除";
+      }
+    }
+  });
+
+  function readMosaicFormOptions() {
+    const divisibility = parseInt(document.getElementById("mosaic-divisibility").value, 10) || 1;
+    const isUnlimited = document.getElementById("mosaic-duration-mode").value === "unlimited";
+    const durationBlocks = parseInt(document.getElementById("mosaic-duration").value, 10) || 0;
+    const initialSupply = parseFloat(document.getElementById("mosaic-initial-supply").value) || 0;
+    const supplyMutable = document.getElementById("mosaic-supply-mutable").checked;
+    const transferable = document.getElementById("mosaic-transferable").checked;
+    const restrictable = document.getElementById("mosaic-restrictable").checked;
+    const revokable = document.getElementById("mosaic-revokable").checked;
+    const linkNamespaceIdHex = document.getElementById("mosaic-link-namespace-select").value || null;
+
+    return {
+      divisibility,
+      isUnlimited,
+      durationBlocks,
+      supplyMutable,
+      transferable,
+      restrictable,
+      revokable,
+      initialSupply,
+      linkNamespaceIdHex,
+    };
+  }
+
+  async function updateMosaicFeeEstimate() {
+    const el = document.getElementById("mosaic-fee-estimate");
+    const rentalEl = document.getElementById("mosaic-rental-fee-estimate");
+    if (!el) return;
+    try {
+      const { feeXym } = estimateMosaicCreationFee(readMosaicFormOptions());
+      el.textContent = `約 ${feeXym} XYM`;
+    } catch (e) {
+      el.textContent = "---";
+    }
+    if (rentalEl) {
+      try {
+        rentalEl.textContent = `約 ${await estimateMosaicRentalFee()} XYM`;
+      } catch {
+        rentalEl.textContent = "---";
+      }
+    }
+  }
+
+  document.getElementById("mosaic-duration-mode")?.addEventListener("change", e => {
+    const row = document.getElementById("mosaic-duration-row");
+    row.style.display = e.target.value === "limited" ? "block" : "none";
+    updateMosaicFeeEstimate();
+  });
+
+  document.getElementById("mosaic-duration-calc-btn")?.addEventListener("click", () => {
+    const panel = document.getElementById("mosaic-duration-presets");
+    panel.style.display = panel.style.display === "none" ? "flex" : "none";
+  });
+
+  document.getElementById("mosaic-duration-presets")?.addEventListener("click", e => {
+    const btn = e.target.closest("[data-days]");
+    if (!btn) return;
+    const days = parseInt(btn.dataset.days, 10);
+    document.getElementById("mosaic-duration").value = days * 2880;
+    document.getElementById("mosaic-duration-presets").style.display = "none";
+    updateMosaicFeeEstimate();
+  });
+
+  document.querySelector('#mosaic-page .card')?.addEventListener("input", updateMosaicFeeEstimate);
+  document.querySelector('#mosaic-page .card')?.addEventListener("change", updateMosaicFeeEstimate);
+
+  document.getElementById("create-mosaic-btn")?.addEventListener("click", async () => {
     setStatus("mosaic-create-status", "作成中...");
     try {
-      const hash = await createMosaic({
-        namespaceFqn,
-        mosaicName,
-        description,
-        divisibility,
-        supplyMutable,
-        transferable,
-        initialSupply,
-      });
+      const hash = await createMosaic(readMosaicFormOptions());
       setStatus("mosaic-create-status", `✅ 作成リクエストを送信しました。Hash: ${hash}`, "success");
       await loadOwnedMosaicsWithAlias();
     } catch (e) {
@@ -736,10 +1941,121 @@ window.addEventListener("load", async () => {
   });
 
   // ============================
+  // モザイク供給量変更
+  // ============================
+  async function populateMosaicSupplyTab() {
+    setStatus("mosaic-supply-status", "", "default");
+    document.getElementById("mosaic-supply-current").textContent = "---";
+    document.getElementById("mosaic-supply-new").textContent = "---";
+    document.getElementById("mosaic-supply-amount").value = "0";
+
+    const select = document.getElementById("mosaic-supply-target-select");
+    select.innerHTML = `<option value="">-- 読み込み中... --</option>`;
+    try {
+      const ids = await fetchOwnedMosaicIds();
+      select.innerHTML = ids.length
+        ? `<option value="">-- モザイクを選択 --</option>` + ids.map(id => `<option value="${id}">${id}</option>`).join("")
+        : `<option value="">-- 作成したモザイクがありません --</option>`;
+    } catch (e) {
+      console.warn("モザイク候補の取得に失敗しました", e);
+      select.innerHTML = `<option value="">-- 取得に失敗しました --</option>`;
+    }
+  }
+
+  let mosaicSupplyDetail = null;
+
+  function updateMosaicSupplyNewValue() {
+    if (!mosaicSupplyDetail) return;
+    const direction = document.getElementById("mosaic-supply-direction").value;
+    const amount = parseFloat(document.getElementById("mosaic-supply-amount").value) || 0;
+    const divisibility = Number(mosaicSupplyDetail.divisibility ?? 0);
+    const currentSupply = Number(mosaicSupplyDetail.supply) / 10 ** divisibility;
+    const newSupply = direction === "decrease" ? currentSupply - amount : currentSupply + amount;
+    document.getElementById("mosaic-supply-new").textContent = newSupply.toLocaleString("ja-JP", {
+      maximumFractionDigits: divisibility,
+    });
+  }
+
+  document.getElementById("mosaic-supply-target-select")?.addEventListener("change", async e => {
+    const mosaicIdHex = e.target.value;
+    mosaicSupplyDetail = null;
+    document.getElementById("mosaic-supply-current").textContent = "---";
+    document.getElementById("mosaic-supply-new").textContent = "---";
+    if (!mosaicIdHex) return;
+
+    try {
+      mosaicSupplyDetail = await fetchMosaicDetail(mosaicIdHex);
+      const divisibility = Number(mosaicSupplyDetail.divisibility ?? 0);
+      const currentSupply = Number(mosaicSupplyDetail.supply) / 10 ** divisibility;
+      document.getElementById("mosaic-supply-current").textContent = currentSupply.toLocaleString("ja-JP", {
+        maximumFractionDigits: divisibility,
+      });
+      updateMosaicSupplyNewValue();
+    } catch (e) {
+      console.error("fetchMosaicDetail error:", e);
+      setStatus("mosaic-supply-status", "モザイク情報の取得に失敗しました。", "error");
+    }
+  });
+
+  document.getElementById("mosaic-supply-direction")?.addEventListener("change", updateMosaicSupplyNewValue);
+  document.getElementById("mosaic-supply-amount")?.addEventListener("input", updateMosaicSupplyNewValue);
+
+  document.getElementById("mosaic-supply-save-btn")?.addEventListener("click", async () => {
+    const mosaicIdHex = document.getElementById("mosaic-supply-target-select").value;
+    const direction = document.getElementById("mosaic-supply-direction").value;
+    const amount = parseFloat(document.getElementById("mosaic-supply-amount").value) || 0;
+
+    if (!mosaicIdHex) {
+      setStatus("mosaic-supply-status", "対象モザイクを選択してください。", "error");
+      return;
+    }
+    if (!mosaicSupplyDetail) {
+      setStatus("mosaic-supply-status", "モザイク情報の取得が完了していません。", "error");
+      return;
+    }
+    if (amount <= 0) {
+      setStatus("mosaic-supply-status", "供給量変更単位を入力してください。", "error");
+      return;
+    }
+
+    setStatus("mosaic-supply-status", "保存中...");
+    try {
+      const hash = await changeMosaicSupply({
+        mosaicIdHex,
+        direction,
+        amount,
+        divisibility: Number(mosaicSupplyDetail.divisibility ?? 0),
+      });
+      setStatus("mosaic-supply-status", `✅ 供給量変更リクエストを送信しました。Hash: ${hash}`, "success");
+    } catch (e) {
+      console.error("changeMosaicSupply error:", e);
+      setStatus("mosaic-supply-status", e.message || "保存に失敗しました。", "error");
+    }
+  });
+
+  // ============================
   // 設定メニュー
   // ============================
   document.getElementById("settings-btn")?.addEventListener("click", () => {
+    const isSss = appState.authMode === "sss";
+    const mnemonicAddItem = document.getElementById("menu-add-mnemonic");
+    const privatekeyAddItem = document.getElementById("menu-add-privatekey");
+    if (mnemonicAddItem) mnemonicAddItem.style.display = isSss ? "none" : "";
+    if (privatekeyAddItem) privatekeyAddItem.style.display = isSss ? "none" : "";
+
+    const lockBtn = document.getElementById("lock-session-btn");
+    if (lockBtn) lockBtn.style.display = getVaultMode() === "encrypted" ? "" : "none";
+
+    const networkSwitchItem = document.getElementById("menu-network-switch");
+    if (networkSwitchItem) networkSwitchItem.style.display = isSss ? "none" : "";
+
     showPage(settingsPage);
+  });
+
+  document.getElementById("lock-session-btn")?.addEventListener("click", () => {
+    lockSession();
+    setStatus("unlock-status", "", "default");
+    showPage(unlockPage);
   });
 
   document.getElementById("menu-node-settings")?.addEventListener("click", async () => {
@@ -748,59 +2064,46 @@ window.addEventListener("load", async () => {
     await loadNodeSettingsCandidates();
   });
 
-  document.getElementById("apply-node-btn")?.addEventListener("click", applyNodeChange);
-
-  // ============================
-  // ネットワーク切り替え
-  // ============================
-  document.getElementById("menu-network-settings")?.addEventListener("click", () => {
-    const current = document.getElementById("network-settings-current");
-    if (current) {
-      current.textContent = appState.networkType === NetworkType.TESTNET ? "Testnet" : "Mainnet";
-    }
-    setStatus("network-settings-status", "", "default");
-    showPage(networkSettingsPage);
+  document.getElementById("menu-fee-settings")?.addEventListener("click", async () => {
+    showPage(feeSettingsPage);
+    await loadFeeSettings();
   });
 
-  document.getElementById("back-settings-network")?.addEventListener("click", () => showPage(settingsPage));
+  document.getElementById("menu-network-switch")?.addEventListener("click", () => {
+    document.getElementById("network-switch-current").textContent =
+      appState.networkType === NetworkType.TESTNET ? "Testnet" : "Mainnet";
+    setStatus("network-switch-status", "", "default");
+    showPage(networkSwitchPage);
+  });
 
-  async function handleSwitchNetwork(targetNetworkType) {
-    setStatus("network-settings-status", "切り替え中...");
+  async function handleNetworkSwitch(networkType) {
+    setStatus("network-switch-status", "切り替え中...");
     try {
-      const ok = await switchNetwork(targetNetworkType);
-      if (!ok) {
-        alert("ネットワーク切り替えができません");
-        setStatus("network-settings-status", "", "default");
-        return;
-      }
-      const current = document.getElementById("network-settings-current");
-      if (current) {
-        current.textContent = targetNetworkType === NetworkType.TESTNET ? "Testnet" : "Mainnet";
-      }
-      setStatus("network-settings-status", "✅ 切り替えました。", "success");
-      goHome();
+      await switchNetwork(networkType);
+      document.getElementById("network-switch-current").textContent =
+        networkType === NetworkType.TESTNET ? "Testnet" : "Mainnet";
+      setStatus("network-switch-status", "✅ 切り替えました。", "success");
     } catch (e) {
       console.error("switchNetwork error:", e);
-      alert("ネットワーク切り替えができません");
-      setStatus("network-settings-status", "", "default");
+      setStatus("network-switch-status", e.message || "切り替えに失敗しました。", "error");
     }
   }
 
-  document.getElementById("switch-to-mainnet-btn")?.addEventListener("click", () => handleSwitchNetwork(NetworkType.MAINNET));
-  document.getElementById("switch-to-testnet-btn")?.addEventListener("click", () => handleSwitchNetwork(NetworkType.TESTNET));
+  document.getElementById("network-switch-mainnet")?.addEventListener("click", () => handleNetworkSwitch(NetworkType.MAINNET));
+  document.getElementById("network-switch-testnet")?.addEventListener("click", () => handleNetworkSwitch(NetworkType.TESTNET));
 
-  // ============================
-  // ログイン画面に戻る(データは削除しない)
-  // ============================
-  document.getElementById("back-to-login-btn")?.addEventListener("click", () => {
-    if (!confirm("ログイン画面（パスワード入力画面）に戻ります。保存されたアカウント情報は削除されません。よろしいですか？")) return;
-    returnToLoginScreen();
-    // 「ログイン画面に戻る」＝パスワード入力画面に戻ること
-    showPage(hasVault() ? unlockPage : welcomePage);
+  document.getElementById("apply-node-btn")?.addEventListener("click", applyNodeChange);
+
+  document.getElementById("fee-options")?.addEventListener("click", e => {
+    const option = e.target.closest(".fee-option");
+    if (!option) return;
+    selectFeeOption(option);
   });
 
+  document.getElementById("apply-fee-btn")?.addEventListener("click", applyFeeSettings);
+
   document.getElementById("logout-btn")?.addEventListener("click", () => {
-    if (!confirm("ログアウトします。次回は再度ニーモニックの入力が必要になります。よろしいですか？")) return;
+    if (!confirm("ログアウトします。次回は再度ニーモニックの入力（またはSSS Extension接続）が必要になります。よろしいですか？")) return;
     logout();
     showPage(welcomePage);
   });
@@ -851,6 +2154,8 @@ window.addEventListener("load", async () => {
       return;
     }
 
+    // ニーモニックがメモリ上にない場合(SSSのみ利用中など)は
+    // 秘密鍵の直接入力で追加する
     showPage(addAccountPrivatekeyPage);
   });
 
@@ -943,6 +2248,8 @@ window.addEventListener("load", async () => {
   document.getElementById("back-account-harvest")?.addEventListener("click", () => showPage(accountPage));
   document.getElementById("back-account-settings")?.addEventListener("click", () => showPage(accountPage));
   document.getElementById("back-settings-node")?.addEventListener("click", () => showPage(settingsPage));
+  document.getElementById("back-settings-fee")?.addEventListener("click", () => showPage(settingsPage));
+  document.getElementById("back-settings-network")?.addEventListener("click", () => showPage(settingsPage));
   document.getElementById("back-account-switcher")?.addEventListener("click", () => showPage(accountPage));
   document.getElementById("back-hidden-accounts")?.addEventListener("click", () => showPage(accountSwitcherPage));
   document.getElementById("back-add-account-menu")?.addEventListener("click", () => showPage(accountSwitcherPage));
@@ -951,10 +2258,28 @@ window.addEventListener("load", async () => {
   document.getElementById("back-account-advanced")?.addEventListener("click", () => showPage(accountPage));
   document.getElementById("back-advanced-namespace")?.addEventListener("click", () => showPage(advancedPage));
   document.getElementById("back-advanced-mosaic")?.addEventListener("click", () => showPage(advancedPage));
+  document.getElementById("back-advanced-metadata")?.addEventListener("click", () => showPage(advancedPage));
   document.getElementById("back-advanced-multisig-menu")?.addEventListener("click", () => showPage(advancedPage));
   document.getElementById("back-multisig-menu-settings")?.addEventListener("click", () => showPage(multisigMenuPage));
   document.getElementById("back-multisig-menu-send")?.addEventListener("click", () => showPage(multisigMenuPage));
   document.getElementById("back-multisig-menu-sign")?.addEventListener("click", () => showPage(multisigMenuPage));
+  document.getElementById("back-advanced-multisend-menu")?.addEventListener("click", () => showPage(advancedPage));
+  document.getElementById("back-multisend-menu-csv")?.addEventListener("click", () => showPage(multisendMenuPage));
+  document.getElementById("back-multisend-menu-list")?.addEventListener("click", () => showPage(multisendMenuPage));
+  document.getElementById("back-advanced-apostille-menu")?.addEventListener("click", () => showPage(advancedPage));
+  document.getElementById("back-apostille-menu-create")?.addEventListener("click", () => showPage(apostilleMenuPage));
+  document.getElementById("back-apostille-menu-verify")?.addEventListener("click", () => showPage(apostilleMenuPage));
+  document.getElementById("back-apostille-menu-history")?.addEventListener("click", () => showPage(apostilleMenuPage));
+  document.getElementById("back-advanced-restriction-menu")?.addEventListener("click", () => showPage(advancedPage));
+  document.getElementById("back-restriction-menu-account")?.addEventListener("click", () => showPage(restrictionMenuPage));
+  document.getElementById("back-restriction-menu-mosaic-top")?.addEventListener("click", () => showPage(restrictionMenuPage));
+  document.getElementById("back-restriction-menu-address")?.addEventListener("click", () => showPage(restrictionAccountMenuPage));
+  document.getElementById("back-restriction-menu-mosaic")?.addEventListener("click", () => showPage(restrictionAccountMenuPage));
+  document.getElementById("back-restriction-menu-operation")?.addEventListener("click", () => showPage(restrictionAccountMenuPage));
+  document.getElementById("back-restriction-menu-mosaic-global")?.addEventListener("click", () => showPage(restrictionMosaicMenuPage));
+  document.getElementById("back-restriction-menu-mosaic-address")?.addEventListener("click", () => showPage(restrictionMosaicMenuPage));
+  document.getElementById("back-advanced-offline-tx")?.addEventListener("click", () => showPage(advancedPage));
+  document.getElementById("back-offline-broadcast")?.addEventListener("click", () => showPage(welcomePage));
 
   // ============================
   // タブ切替
@@ -977,6 +2302,47 @@ window.addEventListener("load", async () => {
     tokenContent.style.display = "none";
     activityContent.style.display = "block";
   });
+
+  // 汎用タブ切替(モザイク・ネームスペース・メタデータ画面で使う)
+  function setupTabGroup(tabIds, contentIds, onShow = []) {
+    tabIds.forEach((tabId, i) => {
+      document.getElementById(tabId)?.addEventListener("click", () => {
+        tabIds.forEach((id, j) => {
+          document.getElementById(id)?.classList.toggle("active", j === i);
+          const content = document.getElementById(contentIds[j]);
+          if (content) content.style.display = j === i ? "block" : "none";
+        });
+        onShow[i]?.();
+      });
+    });
+  }
+
+  setupTabGroup(
+    ["mosaic-tab-owned", "mosaic-tab-create", "mosaic-tab-supply"],
+    ["mosaic-content-owned", "mosaic-content-create", "mosaic-content-supply"],
+    [
+      () => loadOwnedMosaicsWithAlias(),
+      () => updateMosaicFeeEstimate(),
+      () => populateMosaicSupplyTab(),
+    ]
+  );
+
+  setupTabGroup(
+    ["ns-tab-owned", "ns-tab-create", "ns-tab-link"],
+    ["ns-content-owned", "ns-content-create", "ns-content-link"],
+    [
+      () => loadOwnedNamespaces(),
+      () => { updateRootNamespaceFeeEstimate(); updateSubNamespaceFeeEstimate(); },
+      () => { updateNsLinkMosaicFeeEstimate(); updateNsLinkAddressFeeEstimate(); },
+    ]
+  );
+
+  setupTabGroup(
+    ["metadata-tab-owned", "metadata-tab-create"],
+    ["metadata-content-owned", "metadata-content-create"],
+    [() => loadOwnMetadataList(), null]
+  );
+
 
   // ============================
   // アドレスコピー
